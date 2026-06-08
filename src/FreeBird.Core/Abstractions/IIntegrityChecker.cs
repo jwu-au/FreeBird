@@ -24,3 +24,20 @@ public interface IL1IntegrityChecker : IIntegrityChecker { }
 
 /// <summary>L3-specific marker for explicit registration disambiguation.</summary>
 public interface IL3IntegrityChecker : IIntegrityChecker { }
+
+/// <summary>
+/// Composite routing integrity checker. Adds an overload that accepts an explicit
+/// <see cref="IntegrityLevel"/> per call so the same instance can serve any CLI flag.
+/// </summary>
+public interface ICompositeIntegrityChecker : IIntegrityChecker
+{
+    /// <summary>
+    /// Checks the file at <paramref name="filePath"/>, routing to L1 or L3 based on
+    /// <paramref name="level"/>, <paramref name="format"/>, and runtime availability.
+    /// </summary>
+    Task<IntegrityResult> CheckAsync(
+        string filePath,
+        AudioFormat format,
+        IntegrityLevel level,
+        CancellationToken cancellationToken = default);
+}
