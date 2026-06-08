@@ -272,4 +272,47 @@ public class FileProcessorTests : IDisposable
         var fixtureBytes = await File.ReadAllBytesAsync(Fx.SampleMp3Path);
         producedBytes.Should().Equal(fixtureBytes);
     }
+
+    [Fact]
+    public async Task ProcessAsync_StagingFile_HasCorrectExtension_BeforeIntegrityCheck()
+    {
+        var capturedPath = string.Empty;
+        var (sut, _, sniffer, naming, integrity, _) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("42-song.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+               .ReturnsAsync(AudioFormat.Mp3);
+        naming.Setup(n => n.GetOutputFileName(ucPath, AudioFormat.Mp3)).Returns("42-song.mp3");
+
+        // Capture the path that integrity sees
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .Callback<string, AudioFormat, IntegrityLevel, CancellationToken>((p, _, _, _) => capturedPath = p)
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        capturedPath.Should().EndWith(".mp3", "integrity must see staging file with proper extension for TagLib/flac to identify format");
+    }
+
+    [Fact]
+    public async Task ProcessAsync_FlacStaging_HasFlacExtension_BeforeIntegrityCheck()
+    {
+        var capturedPath = string.Empty;
+        var (sut, _, sniffer, naming, integrity, _) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("99-song.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+               .ReturnsAsync(AudioFormat.Flac);
+        naming.Setup(n => n.GetOutputFileName(ucPath, AudioFormat.Flac)).Returns("99-song.flac");
+
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .Callback<string, AudioFormat, IntegrityLevel, CancellationToken>((p, _, _, _) => capturedPath = p)
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L3));
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        capturedPath.Should().EndWith(".flac");
+    }
 }

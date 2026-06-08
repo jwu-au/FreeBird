@@ -99,6 +99,13 @@ public sealed class FileProcessor : IFileProcessor
                     Reason: "Unknown format");
             }
 
+            // Step 4.5: rename staging file to include the correct extension so integrity
+            // checks (TagLib#, flac -t) can identify the format from the extension.
+            var stagingExt = GetExtensionForFormat(format);
+            var stagingPathWithExt = stagingPath + stagingExt;
+            File.Move(stagingPath, stagingPathWithExt);
+            stagingPath = stagingPathWithExt;
+
             // Step 5: integrity
             var integrity = await _integrity.CheckAsync(stagingPath, format, options.Integrity, cancellationToken)
                 .ConfigureAwait(false);
@@ -175,4 +182,12 @@ public sealed class FileProcessor : IFileProcessor
         try { if (File.Exists(path)) { File.Delete(path); } }
         catch { /* best-effort */ }
     }
+
+    private static string GetExtensionForFormat(AudioFormat format) => format switch
+    {
+        AudioFormat.Mp3 => ".mp3",
+        AudioFormat.Flac => ".flac",
+        AudioFormat.M4a => ".m4a",
+        _ => ".bin",
+    };
 }

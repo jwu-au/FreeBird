@@ -40,13 +40,7 @@ public class ScanRunnerEndToEndTests : IDisposable
 
         var exitCode = await ScanRunner.RunAsync(
             _inputDir, _outputDir,
-            // Integrity.Off: the production integrity check runs on the
-            // staging '.bin' file before atomic rename, and TagLib# requires
-            // the extension to detect format (see TagLibIntegrityChecker
-            // and the mocked integrity in Core.Tests FileProcessor E2E test).
-            // T20 verifies decrypt + sniff + atomic-write end-to-end via CLI;
-            // T21 covers L3 with a dedicated path.
-            IntegrityLevel.Off,
+            IntegrityLevel.L1,
             concurrency: 1,
             collision: CollisionPolicy.Skip,
             verbose: false);
@@ -76,7 +70,7 @@ public class ScanRunnerEndToEndTests : IDisposable
 
         var exitCode = await ScanRunner.RunAsync(
             _inputDir, _outputDir,
-            IntegrityLevel.Off, 1, CollisionPolicy.Skip, false);
+            IntegrityLevel.L1, 1, CollisionPolicy.Skip, false);
 
         exitCode.Should().Be(ScanRunner.ExitOk);
         File.Exists(Path.Combine(_outputDir, "99-mac.mp3")).Should().BeTrue();
@@ -90,7 +84,7 @@ public class ScanRunnerEndToEndTests : IDisposable
 
         var exitCode = await ScanRunner.RunAsync(
             _inputDir, _outputDir,
-            IntegrityLevel.Off, // see Mp3_DotUcSuffix... for rationale; T21 covers L3
+            IntegrityLevel.L1,
             1, CollisionPolicy.Skip, false);
 
         exitCode.Should().Be(ScanRunner.ExitOk);
@@ -114,7 +108,7 @@ public class ScanRunnerEndToEndTests : IDisposable
 
         var exitCode = await ScanRunner.RunAsync(
             _inputDir, _outputDir,
-            IntegrityLevel.Off, 2, CollisionPolicy.Skip, false);
+            IntegrityLevel.L1, 2, CollisionPolicy.Skip, false);
 
         exitCode.Should().Be(ScanRunner.ExitOk);
         for (int i = 0; i < 4; i++)
@@ -135,7 +129,7 @@ public class ScanRunnerEndToEndTests : IDisposable
 
         var exitCode = await ScanRunner.RunAsync(
             _inputDir, _outputDir,
-            IntegrityLevel.Off, 1, CollisionPolicy.Skip, false);
+            IntegrityLevel.L1, 1, CollisionPolicy.Skip, false);
 
         exitCode.Should().Be(ScanRunner.ExitOk);
         (await File.ReadAllTextAsync(existing)).Should().Be("SENTINEL", "skip policy must preserve existing file");
@@ -152,7 +146,7 @@ public class ScanRunnerEndToEndTests : IDisposable
 
         var exitCode = await ScanRunner.RunAsync(
             _inputDir, _outputDir,
-            IntegrityLevel.Off, 1, CollisionPolicy.Overwrite, false);
+            IntegrityLevel.L1, 1, CollisionPolicy.Overwrite, false);
 
         exitCode.Should().Be(ScanRunner.ExitOk);
         var bytes = await File.ReadAllBytesAsync(existing);
