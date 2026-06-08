@@ -18,30 +18,37 @@ public sealed class StemPlusExtensionNamingStrategy : INamingStrategy
             throw new ArgumentException("Cannot generate filename for unknown format", nameof(format));
         }
 
-        // Strip directory components — handle both '/' and '\' regardless of host OS,
-        // since the input may originate from a different platform than the runtime.
-        var lastSeparator = sourceFilePath.LastIndexOfAny(new[] { '/', '\\' });
-        var basename = lastSeparator >= 0
-            ? sourceFilePath[(lastSeparator + 1)..]
-            : sourceFilePath;
-
-        // Strip .uc or .uc! (case-insensitive)
-        var stem = StripUcSuffix(basename);
+        // Strip directory + .uc/.uc! suffix via shared helper
+        var stem = GetStem(sourceFilePath);
 
         return stem + GetExtension(format);
     }
 
-    private static string StripUcSuffix(string basename)
+    /// <summary>
+    /// Extract the stem (filename without .uc / .uc! suffix and without directory) from a source path.
+    /// Public so other components (e.g. FileProcessor quarantine) can use the same logic.
+    /// For inputs without a .uc/.uc! suffix, the final extension (if any) is stripped instead.
+    /// </summary>
+    public static string GetStem(string sourcePath)
     {
-        if (basename.EndsWith(".uc!", StringComparison.OrdinalIgnoreCase))
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
+
+        // Robustly extract filename across OS path separators (input may originate from a different OS)
+        var slashIdx = sourcePath.LastIndexOfAny(new[] { '/', '\\' });
+        var filename = slashIdx >= 0 ? sourcePath[(slashIdx + 1)..] : sourcePath;
+
+        // Strip .uc! (4 chars) first, then .uc (3 chars), both case-insensitive.
+        // Non-uc filenames are returned as-is (preserving any other extension), so
+        // GetOutputFileName(nothing.txt, mp3) still produces "nothing.txt.mp3".
+        if (filename.EndsWith(".uc!", StringComparison.OrdinalIgnoreCase))
         {
-            return basename[..^4];
+            return filename[..^4];
         }
-        if (basename.EndsWith(".uc", StringComparison.OrdinalIgnoreCase))
+        if (filename.EndsWith(".uc", StringComparison.OrdinalIgnoreCase))
         {
-            return basename[..^3];
+            return filename[..^3];
         }
-        return basename;
+        return filename;
     }
 
     private static string GetExtension(AudioFormat format) => format switch

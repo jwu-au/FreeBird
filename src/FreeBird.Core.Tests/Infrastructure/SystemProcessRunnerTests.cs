@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -52,6 +53,25 @@ public class SystemProcessRunnerTests
 
         Func<Task> act = () => _sut.RunAsync(fileName, args, cts.Token);
         await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    // --- T15.6 M9: ensure stderr is fully drained before ExitCode is read ---
+
+    [Fact]
+    public async Task RunAsync_MultilineStderrThenExit_AllLinesCaptured()
+    {
+        // The process writes 3 stderr lines then exits. Pre-fix, stdout/stderr drain could race
+        // WaitForExitAsync and lose the last line(s) — particularly important for flac, whose
+        // failure reasons appear on stderr.
+        var (file, args) = OperatingSystem.IsWindows()
+            ? ("cmd", (IReadOnlyList<string>)new[] { "/c", "(echo line1 1>&2) & (echo line2 1>&2) & (echo line3 1>&2)" })
+            : ("/bin/sh", (IReadOnlyList<string>)new[] { "-c", "printf 'line1\\nline2\\nline3\\n' >&2" });
+
+        var result = await _sut.RunAsync(file, args);
+
+        result.StandardError.Should().Contain("line1");
+        result.StandardError.Should().Contain("line2");
+        result.StandardError.Should().Contain("line3");
     }
 
     [Fact]

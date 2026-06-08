@@ -38,8 +38,23 @@ public sealed class SystemProcessRunner : IProcessRunner
         var stdout = new StringBuilder();
         var stderr = new StringBuilder();
 
-        process.OutputDataReceived += (_, e) => { if (e.Data is not null) { stdout.AppendLine(e.Data); } };
-        process.ErrorDataReceived += (_, e) => { if (e.Data is not null) { stderr.AppendLine(e.Data); } };
+        // T15.6 M9: TCS-driven drain — the OutputDataReceived / ErrorDataReceived events fire
+        // with a null Data sentinel once the corresponding stream is fully drained by the runtime.
+        // Waiting on those sentinels (in addition to WaitForExitAsync) prevents a race where the
+        // process has exited but the async reader hasn't flushed the final lines yet.
+        var stdoutDone = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stderrDone = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data is null) { stdoutDone.TrySetResult(true); }
+            else { stdout.AppendLine(e.Data); }
+        };
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data is null) { stderrDone.TrySetResult(true); }
+            else { stderr.AppendLine(e.Data); }
+        };
 
         if (!process.Start())
         {
@@ -52,8 +67,21 @@ public sealed class SystemProcessRunner : IProcessRunner
         try
         {
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+
+            // Now wait for both readers to drain their final EOF sentinel. Cap at 5 seconds in
+            // case of a rare runtime hiccup so we never hang forever — partial output is fine.
+            using var drainCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            try
+            {
+                await Task.WhenAll(stdoutDone.Task, stderrDone.Task)
+                    .WaitAsync(drainCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // Drain timeout — not fatal. Fall through and return what we captured.
+            }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             try
             {

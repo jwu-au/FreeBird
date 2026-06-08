@@ -42,10 +42,15 @@ static async Task<int> BuildAndRun(string[] args)
         Description = "Verbose logging (Debug level).",
     };
 
+    var quietOpt = new Option<bool>("--quiet", "-q")
+    {
+        Description = "Quiet logging (Warning level and above only). Mutually exclusive with --verbose.",
+    };
+
     var scanCommand = new Command("scan",
         "Decode all .uc/.uc! files in <input-dir>, write decoded audio to --output.")
     {
-        inputArg, outputOpt, integrityOpt, concurrencyOpt, collisionOpt, verboseOpt,
+        inputArg, outputOpt, integrityOpt, concurrencyOpt, collisionOpt, verboseOpt, quietOpt,
     };
 
     scanCommand.SetAction(async (parseResult, ct) =>
@@ -56,8 +61,9 @@ static async Task<int> BuildAndRun(string[] args)
         var concurrency = parseResult.GetValue(concurrencyOpt);
         var collision = parseResult.GetValue(collisionOpt);
         var verbose = parseResult.GetValue(verboseOpt);
+        var quiet = parseResult.GetValue(quietOpt);
 
-        return await ScanRunner.RunAsync(input, output, integrity, concurrency, collision, verbose, ct);
+        return await ScanRunner.RunAsync(input, output, integrity, concurrency, collision, verbose, quiet, ct);
     });
 
     var root = new RootCommand("FreeBird — NetEase Music cache decoder") { scanCommand };

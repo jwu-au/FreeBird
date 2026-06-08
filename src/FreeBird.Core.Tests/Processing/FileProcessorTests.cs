@@ -295,6 +295,79 @@ public class FileProcessorTests : IDisposable
         capturedPath.Should().EndWith(".mp3", "integrity must see staging file with proper extension for TagLib/flac to identify format");
     }
 
+    // --- T15.6 D5: sidecar contains all 5 spec'd fields ---
+
+    [Fact]
+    public async Task ProcessAsync_QuarantineSidecar_ContainsAllFiveSpecFields()
+    {
+        var (sut, _, sniffer, naming, integrity, _) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("77-meta.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        naming.Setup(n => n.GetOutputFileName(ucPath, AudioFormat.Flac)).Returns("77-meta.flac");
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Failed(IntegrityLevel.L3, "PCM-MD5 mismatch"));
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions(IntegrityLevel.L3));
+
+        result.Outcome.Should().Be(ScanOutcome.IntegrityFailed);
+        var sidecar = await File.ReadAllTextAsync(result.OutputPath + ".txt");
+        // All 5 spec'd labels must appear
+        sidecar.Should().Contain("timestamp:");
+        sidecar.Should().Contain("source:");
+        sidecar.Should().Contain("format:");
+        sidecar.Should().Contain("integrity:");
+        sidecar.Should().Contain("reason:");
+        // And values
+        sidecar.Should().Contain(ucPath);                 // source value
+        sidecar.Should().Contain("Flac");                 // format value
+        sidecar.Should().Contain("L3");                   // integrity value
+        sidecar.Should().Contain("PCM-MD5 mismatch");     // reason value
+    }
+
+    // --- T15.6 D6: .uc! quarantine name strips suffix correctly ---
+
+    [Fact]
+    public async Task ProcessAsync_UnknownFormat_UcBangSuffix_QuarantineNameStripsCorrectly()
+    {
+        var (sut, _, sniffer, _, _, _) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("99-mac.uc!");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Unknown);
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+
+        result.Outcome.Should().Be(ScanOutcome.UnknownFormat);
+        // BUG (pre-fix): produced "99-mac.uc.bin" — must now be "99-mac.bin"
+        Path.GetFileName(result.OutputPath!).Should().Be("99-mac.bin");
+    }
+
+    // --- T15.6 C1: sidecar.tmp is not left behind after successful quarantine ---
+
+    [Fact]
+    public async Task ProcessAsync_QuarantineSidecarTmp_NotLeftBehind_AfterSuccess()
+    {
+        var (sut, _, sniffer, naming, integrity, _) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("xx-fail.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
+        naming.Setup(n => n.GetOutputFileName(ucPath, AudioFormat.Mp3)).Returns("xx-fail.mp3");
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Failed(IntegrityLevel.L1, "structural failure"));
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+
+        result.Outcome.Should().Be(ScanOutcome.IntegrityFailed);
+        var failedDir = Path.Combine(_outputDir, ".freebird-failed");
+        Directory.Exists(failedDir).Should().BeTrue();
+        var files = Directory.GetFiles(failedDir);
+        // Expect exactly 2 files: the quarantined audio + its sidecar .txt. No .tmp leftovers.
+        files.Should().HaveCount(2);
+        files.Should().Contain(f => f.EndsWith(".mp3"));
+        files.Should().Contain(f => f.EndsWith(".mp3.txt"));
+        files.Should().NotContain(f => f.EndsWith(".tmp"));
+    }
+
     [Fact]
     public async Task ProcessAsync_FlacStaging_HasFlacExtension_BeforeIntegrityCheck()
     {

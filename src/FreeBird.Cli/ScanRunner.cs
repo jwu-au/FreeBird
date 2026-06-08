@@ -29,9 +29,22 @@ public static class ScanRunner
         int concurrency,
         CollisionPolicy collision,
         bool verbose,
+        bool quiet = false,
         CancellationToken externalToken = default)
     {
-        ILogger logger = BuildLogger(verbose);
+        // D1: --verbose and --quiet are mutually exclusive — caller must pick one.
+        // Built before the logger so we can use a default Information-level logger to emit the error.
+        if (verbose && quiet)
+        {
+            using var bootstrap = new LoggerConfiguration()
+                .MinimumLevel.Is(LogEventLevel.Information)
+                .WriteTo.Console()
+                .CreateLogger();
+            bootstrap.Error("--verbose and --quiet are mutually exclusive; pick one.");
+            return ExitBadArgs;
+        }
+
+        ILogger logger = BuildLogger(verbose, quiet);
         try
         {
             if (!Directory.Exists(inputDir))
@@ -45,6 +58,26 @@ public static class ScanRunner
             await using var container = BuildContainer(logger);
             await using var scope = container.BeginLifetimeScope();
 
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(externalToken);
+
+            // D2 + D3 + D4: Probe flac at startup (not lazily) so we can fail fast for --integrity l3
+            // when the binary is missing, and emit a one-time warning for --integrity auto fallback.
+            var probe = scope.Resolve<IFlacProbe>();
+            var flacAvailable = await probe.IsAvailableAsync(cts.Token).ConfigureAwait(false);
+
+            if (integrity == IntegrityLevel.L3 && !flacAvailable)
+            {
+                logger.Error(
+                    "--integrity l3 requires the 'flac' binary on PATH (install via `brew install flac` / `apt install flac`).");
+                return ExitBadArgs;
+            }
+
+            if (integrity == IntegrityLevel.Auto && !flacAvailable)
+            {
+                logger.Warning(
+                    "--integrity auto: 'flac' binary not found on PATH; falling back to L1 (structural check only) for FLAC files. Install flac for full PCM-MD5 verification.");
+            }
+
             var orchestrator = scope.Resolve<IScanOrchestrator>();
             var options = new ScanOptions(
                 Path.GetFullPath(inputDir),
@@ -53,7 +86,6 @@ public static class ScanRunner
                 Math.Max(1, concurrency),
                 collision);
 
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(externalToken);
             ConsoleCancelEventHandler handler = (_, e) =>
             {
                 e.Cancel = true;
@@ -93,10 +125,15 @@ public static class ScanRunner
         }
     }
 
-    private static ILogger BuildLogger(bool verbose)
+    private static ILogger BuildLogger(bool verbose, bool quiet)
     {
+        // quiet wins over verbose by design — but mutual exclusion is enforced at the entry point,
+        // so reaching here with both true should not happen.
+        var level = quiet ? LogEventLevel.Warning
+                  : verbose ? LogEventLevel.Debug
+                  : LogEventLevel.Information;
         return new LoggerConfiguration()
-            .MinimumLevel.Is(verbose ? LogEventLevel.Debug : LogEventLevel.Information)
+            .MinimumLevel.Is(level)
             .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
             .CreateLogger();
     }

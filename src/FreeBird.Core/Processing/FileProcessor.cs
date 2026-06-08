@@ -1,8 +1,10 @@
 using System;
 using System.IO;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using FreeBird.Core.Abstractions;
+using FreeBird.Core.Decoding;
 using FreeBird.Core.Models;
 
 namespace FreeBird.Core.Processing;
@@ -89,8 +91,12 @@ public sealed class FileProcessor : IFileProcessor
             // Step 4: unknown -> quarantine
             if (format == AudioFormat.Unknown)
             {
-                var sourceStem = Path.GetFileNameWithoutExtension(sourcePath);
-                var quarantinedPath = QuarantineFile(stagingPath, failedDir, $"{sourceStem}.bin", "Unknown format");
+                // Use shared GetStem so .uc! is stripped correctly (Path.GetFileNameWithoutExtension
+                // may yield "foo.uc" for "foo.uc!" depending on runtime, leaving a confusing "foo.uc.bin").
+                var sourceStem = StemPlusExtensionNamingStrategy.GetStem(sourcePath);
+                var quarantinedPath = QuarantineFile(
+                    stagingPath, failedDir, $"{sourceStem}.bin",
+                    sourcePath, AudioFormat.Unknown, levelApplied: null, reason: "Unknown format");
                 return new ScanResult(
                     sourcePath,
                     ScanOutcome.UnknownFormat,
@@ -114,7 +120,9 @@ public sealed class FileProcessor : IFileProcessor
             if (!integrity.Ok)
             {
                 var outputName = _naming.GetOutputFileName(sourcePath, format);
-                var quarantinedPath = QuarantineFile(stagingPath, failedDir, outputName, integrity.Reason ?? "Integrity failed");
+                var quarantinedPath = QuarantineFile(
+                    stagingPath, failedDir, outputName,
+                    sourcePath, format, integrity.LevelApplied, integrity.Reason ?? "Integrity failed");
                 return new ScanResult(
                     sourcePath,
                     ScanOutcome.IntegrityFailed,
@@ -164,17 +172,62 @@ public sealed class FileProcessor : IFileProcessor
         }
     }
 
-    private static string QuarantineFile(string stagingPath, string failedDir, string fileName, string reason)
+    /// <summary>
+    /// Move the staging file into the failed/quarantine directory and write the spec'd 5-field
+    /// sidecar metadata next to it. The sidecar is written first to a `.tmp` file so that if any
+    /// step fails the staging file is not stranded with no record (C1 ship-blocker).
+    /// </summary>
+    private static string QuarantineFile(
+        string stagingPath,
+        string failedDir,
+        string fileName,
+        string sourcePath,
+        AudioFormat format,
+        IntegrityLevel? levelApplied,
+        string reason)
     {
         Directory.CreateDirectory(failedDir);
         var dest = Path.Combine(failedDir, fileName);
-        // If a previous quarantine of the same name exists, overwrite (latest failure wins)
-        if (File.Exists(dest)) { File.Delete(dest); }
-        File.Move(stagingPath, dest);
-
         var sidecarPath = dest + ".txt";
-        File.WriteAllText(sidecarPath, reason);
+        var sidecarTmp = sidecarPath + ".tmp";
+        var sidecarContent = BuildSidecarContent(sourcePath, format, levelApplied, reason);
+
+        // 1) Write sidecar to a .tmp file first — if this fails, the staging file remains in place.
+        File.WriteAllText(sidecarTmp, sidecarContent);
+
+        try
+        {
+            // 2) Move staging file to its final quarantine destination (overwrite if needed).
+            if (File.Exists(dest)) { File.Delete(dest); }
+            File.Move(stagingPath, dest);
+
+            // 3) Atomically rename sidecar.tmp -> sidecar to commit the metadata record.
+            if (File.Exists(sidecarPath)) { File.Delete(sidecarPath); }
+            File.Move(sidecarTmp, sidecarPath);
+        }
+        catch
+        {
+            // Clean up half-written sidecar tmp on any failure to keep failed/ tidy.
+            try { if (File.Exists(sidecarTmp)) { File.Delete(sidecarTmp); } } catch { /* best-effort */ }
+            throw;
+        }
+
         return dest;
+    }
+
+    private static string BuildSidecarContent(
+        string sourcePath,
+        AudioFormat format,
+        IntegrityLevel? levelApplied,
+        string reason)
+    {
+        var sb = new StringBuilder();
+        sb.Append("timestamp: ").AppendLine(DateTime.UtcNow.ToString("O"));
+        sb.Append("source:    ").AppendLine(sourcePath);
+        sb.Append("format:    ").AppendLine(format.ToString());
+        sb.Append("integrity: ").AppendLine(levelApplied?.ToString() ?? "-");
+        sb.Append("reason:    ").AppendLine(reason);
+        return sb.ToString();
     }
 
     private static void TryDelete(string path)

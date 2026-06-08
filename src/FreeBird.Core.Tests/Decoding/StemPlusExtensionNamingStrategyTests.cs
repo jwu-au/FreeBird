@@ -47,6 +47,36 @@ public class StemPlusExtensionNamingStrategyTests
         act.Should().Throw<ArgumentException>().WithMessage("*unknown format*");
     }
 
+    // T15.6: GetStem public static helper — same suffix-stripping logic, used by FileProcessor quarantine.
+    // Non-uc inputs are returned as-is (preserves any other extension); only .uc / .uc! are stripped.
+    [Theory]
+    [InlineData("foo.uc", "foo")]
+    [InlineData("foo.uc!", "foo")]
+    [InlineData("path/foo.uc", "foo")]
+    [InlineData("path\\foo.uc!", "foo")]
+    [InlineData("Foo.UC!", "Foo")]
+    [InlineData("Foo.Uc", "Foo")]
+    [InlineData("/a/b/c/song.uc", "song")]
+    [InlineData("C:\\Users\\x\\song.uc!", "song")]
+    [InlineData("foo", "foo")]
+    [InlineData("weird.name.uc!", "weird.name")]
+    [InlineData("nothing.txt", "nothing.txt")]
+    public void GetStem_StripsUcSuffixAndDirectory(string input, string expected)
+    {
+        StemPlusExtensionNamingStrategy.GetStem(input).Should().Be(expected);
+    }
+
+    [Fact]
+    public void GetStem_NullOrWhitespace_Throws()
+    {
+        Action a1 = () => StemPlusExtensionNamingStrategy.GetStem(null!);
+        Action a2 = () => StemPlusExtensionNamingStrategy.GetStem("");
+        Action a3 = () => StemPlusExtensionNamingStrategy.GetStem("   ");
+        a1.Should().Throw<ArgumentException>();
+        a2.Should().Throw<ArgumentException>();
+        a3.Should().Throw<ArgumentException>();
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
