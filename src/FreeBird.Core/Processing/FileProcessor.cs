@@ -91,8 +91,8 @@ public sealed class FileProcessor : IFileProcessor
             // Step 4: unknown -> quarantine
             if (format == AudioFormat.Unknown)
             {
-                // Use shared GetStem so .uc! is stripped correctly (Path.GetFileNameWithoutExtension
-                // may yield "foo.uc" for "foo.uc!" depending on runtime, leaving a confusing "foo.uc.bin").
+                // Use the naming strategy's stem extractor for consistency with the OK-path naming
+                // (cross-runtime safe; .NET 10 + Mono variants handle .uc! differently in Path.GetFileNameWithoutExtension).
                 var sourceStem = StemPlusExtensionNamingStrategy.GetStem(sourcePath);
                 var quarantinedPath = QuarantineFile(
                     stagingPath, failedDir, $"{sourceStem}.bin",

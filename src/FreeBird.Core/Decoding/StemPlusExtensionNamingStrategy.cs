@@ -27,7 +27,7 @@ public sealed class StemPlusExtensionNamingStrategy : INamingStrategy
     /// <summary>
     /// Extract the stem (filename without .uc / .uc! suffix and without directory) from a source path.
     /// Public so other components (e.g. FileProcessor quarantine) can use the same logic.
-    /// For inputs without a .uc/.uc! suffix, the final extension (if any) is stripped instead.
+    /// For inputs without a .uc/.uc! suffix, the filename is returned unchanged (preserving any other extension).
     /// </summary>
     public static string GetStem(string sourcePath)
     {
