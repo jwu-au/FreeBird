@@ -153,4 +153,54 @@ public class ScanRunnerEndToEndTests : IDisposable
         var fixtureBytes = await File.ReadAllBytesAsync(TestFixtures.SampleMp3Path);
         bytes.Should().Equal(fixtureBytes);
     }
+
+    [Fact]
+    public async Task Mp3_L1_Integrity_DetectsCorruption_QuarantinesAndExitsWithFailures()
+    {
+        // Read valid MP3 fixture, smash the first 256 bytes (destroys ID3 header AND any usable
+        // MP3 frame sync) but leave the rest intact. The format sniffer would then return Unknown
+        // (no recognizable magic) OR Mp3 if a sync byte happens to appear later — either way the
+        // integrity / sniff layer correctly rejects it and the file ends up in .freebird-failed.
+        var fixtureBytes = await File.ReadAllBytesAsync(TestFixtures.SampleMp3Path);
+        var rng = new Random(42); // deterministic
+        for (int i = 0; i < 256 && i < fixtureBytes.Length; i++)
+        {
+            // Force first 256 bytes to a known non-magic pattern (avoid accidentally hitting
+            // ID3/sync/FLAC/M4A magic). 0xAA is not in any of our magic byte sequences.
+            fixtureBytes[i] = 0xAA;
+        }
+
+        // XOR-encrypt the corrupted blob to make a .uc
+        var encrypted = new byte[fixtureBytes.Length];
+        for (int i = 0; i < fixtureBytes.Length; i++) { encrypted[i] = (byte)(fixtureBytes[i] ^ 0xA3); }
+        var ucPath = Path.Combine(_inputDir, "bad-mp3.uc");
+        await File.WriteAllBytesAsync(ucPath, encrypted);
+
+        var exitCode = await ScanRunner.RunAsync(
+            _inputDir, _outputDir,
+            IntegrityLevel.L1,
+            1, CollisionPolicy.Skip, false, false);
+
+        exitCode.Should().Be(ScanRunner.ExitFailures);
+
+        // No valid MP3 output should be produced
+        File.Exists(Path.Combine(_outputDir, "bad-mp3.mp3")).Should().BeFalse();
+
+        // Quarantine: there should be both a binary and a sidecar .txt
+        var failedDir = Path.Combine(_outputDir, ".freebird-failed");
+        Directory.Exists(failedDir).Should().BeTrue("failed dir should be created for corrupted input");
+        var failedFiles = Directory.GetFiles(failedDir);
+        failedFiles.Should().NotBeEmpty();
+        failedFiles.Should().Contain(f => f.EndsWith(".txt"), "sidecar must exist");
+
+        // Sidecar must contain the 5 spec fields
+        var sidecar = failedFiles.First(f => f.EndsWith(".txt"));
+        var content = await File.ReadAllTextAsync(sidecar);
+        content.Should().Contain("timestamp:");
+        content.Should().Contain("source:");
+        content.Should().Contain("format:");
+        content.Should().Contain("integrity:");
+        content.Should().Contain("reason:");
+        content.Should().Contain("bad-mp3.uc");
+    }
 }
