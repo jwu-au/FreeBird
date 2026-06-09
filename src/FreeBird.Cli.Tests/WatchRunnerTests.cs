@@ -36,6 +36,7 @@ public class WatchRunnerTests : IDisposable
     public void Dispose()
     {
         WatchRunner.OrchestratorFactoryOverride = null;
+        WatchRunner.CoordinatorFactoryOverride = null;
         try { Directory.Delete(_tempDir, recursive: true); } catch { }
     }
 
@@ -243,5 +244,94 @@ public class WatchRunnerTests : IDisposable
         output.Should().Contain("Ok=7");
         output.Should().Contain("Skipped=2");
         output.Should().Contain("IntegrityFailed=1");
+    }
+
+    // --- T12: SIGINT/SIGTERM handler + exit code 130 mapping ---
+
+    [Fact]
+    public async Task Run_SignalCountNonZero_Returns130_EvenIfSummaryClean()
+    {
+        // Orchestrator returns a clean summary, but the coordinator reports a signal was
+        // received. WatchRunner must honor the Unix convention and return 130 rather than 0.
+        var mock = new Mock<IWatchOrchestrator>();
+        mock.Setup(o => o.RunAsync(
+                It.IsAny<FreeBird.Core.Models.WatchOptions>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(EmptySummary());
+        WatchRunner.OrchestratorFactoryOverride = _ => mock.Object;
+
+        WatchRunner.CoordinatorFactoryOverride = logger =>
+        {
+            var c = new CancellationCoordinator(TimeProvider.System, logger);
+            c.OnCancelRequested();   // simulate one Ctrl-C — SignalCount becomes 1
+            return c;
+        };
+
+        var runner = new WatchRunner();
+        var exit = await runner.RunAsync(MakeOpts(noLogFile: true), CancellationToken.None);
+
+        exit.Should().Be(130);
+    }
+
+    [Fact]
+    public async Task Run_SignalCountNonZero_Returns130_EvenWithFailures()
+    {
+        // Even when the summary has failures, the signal-driven exit code (130) takes precedence
+        // because the user's abort is the more informative signal to the calling shell.
+        var failing = new ScanSummary(
+            Processed: 5, Ok: 3, Skipped: 0, UnknownFormat: 0,
+            IntegrityFailed: 2, Errors: 0, Duration: TimeSpan.FromSeconds(1));
+        var mock = new Mock<IWatchOrchestrator>();
+        mock.Setup(o => o.RunAsync(
+                It.IsAny<FreeBird.Core.Models.WatchOptions>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(failing);
+        WatchRunner.OrchestratorFactoryOverride = _ => mock.Object;
+
+        WatchRunner.CoordinatorFactoryOverride = logger =>
+        {
+            var c = new CancellationCoordinator(TimeProvider.System, logger);
+            c.OnHardSignalRequested();   // simulate SIGTERM — SignalCount becomes 1
+            return c;
+        };
+
+        var runner = new WatchRunner();
+        var exit = await runner.RunAsync(MakeOpts(noLogFile: true), CancellationToken.None);
+
+        exit.Should().Be(130);
+    }
+
+    [Fact]
+    public async Task Run_OrchestratorReceives_TwoDistinctTokens_FromCoordinator()
+    {
+        // Verify the runner threads TWO distinct tokens (graceful + hard) through to the
+        // orchestrator's RunAsync — not the same single token as in T11.
+        CancellationToken capturedGraceful = default;
+        CancellationToken capturedHard = default;
+        bool capturedDuringCall = false;
+        var mock = new Mock<IWatchOrchestrator>();
+        mock.Setup(o => o.RunAsync(
+                It.IsAny<FreeBird.Core.Models.WatchOptions>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<FreeBird.Core.Models.WatchOptions, CancellationToken, CancellationToken>(
+                (_, g, h) =>
+                {
+                    capturedGraceful = g;
+                    capturedHard = h;
+                    capturedDuringCall = true;
+                })
+            .ReturnsAsync(EmptySummary());
+        WatchRunner.OrchestratorFactoryOverride = _ => mock.Object;
+
+        var runner = new WatchRunner();
+        var exit = await runner.RunAsync(MakeOpts(noLogFile: true), CancellationToken.None);
+
+        exit.Should().Be(0);
+        capturedDuringCall.Should().BeTrue();
+        // The two tokens passed to the orchestrator must be distinct (different underlying CTS).
+        capturedGraceful.Should().NotBe(capturedHard);
     }
 }

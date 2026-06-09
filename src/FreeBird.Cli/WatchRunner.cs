@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Autofac;
@@ -34,6 +35,13 @@ public sealed class WatchRunner
     /// running the real watch loop.
     /// </summary>
     public static Func<ILogger, IWatchOrchestrator>? OrchestratorFactoryOverride { get; set; }
+
+    /// <summary>
+    /// Test-only hook: if non-null, the runner uses this coordinator instead of constructing its
+    /// own. Lets tests inject a pre-signalled coordinator to verify the exit-code 130 mapping
+    /// without involving real OS signals.
+    /// </summary>
+    public static Func<ILogger, CancellationCoordinator>? CoordinatorFactoryOverride { get; set; }
 
     public async Task<int> RunAsync(WatchOptions cliOptions, CancellationToken externalToken = default)
     {
@@ -77,6 +85,9 @@ public sealed class WatchRunner
             IWatchOrchestrator orchestrator;
             IContainer? container = null;
             ILifetimeScope? scope = null;
+            CancellationCoordinator? coordinator = null;
+            IDisposable? sigintRegistration = null;
+            IDisposable? sigtermRegistration = null;
 
             try
             {
@@ -91,20 +102,43 @@ public sealed class WatchRunner
                     orchestrator = scope.Resolve<IWatchOrchestrator>();
                 }
 
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(externalToken);
+                coordinator = CoordinatorFactoryOverride is not null
+                    ? CoordinatorFactoryOverride(logger)
+                    : new CancellationCoordinator(TimeProvider.System, logger);
 
-                // T11: graceful and hard tokens are the same for now — T12 wires double-Ctrl-C.
-                var summary = await orchestrator.RunAsync(coreOptions, cts.Token, cts.Token).ConfigureAwait(false);
+                // Wire OS signals → coordinator. If the external token fires, treat it as a
+                // graceful cancel (e.g. a host CTS triggered programmatically).
+                sigintRegistration = SubscribeSigint(coordinator);
+                sigtermRegistration = SubscribeSigterm(coordinator);
+                using var externalReg = externalToken.CanBeCanceled
+                    ? externalToken.Register(static c => ((CancellationCoordinator)c!).OnCancelRequested(), coordinator)
+                    : default;
 
-                Console.Out.WriteLine(
-                    $"Watch summary: Processed={summary.Processed}, Ok={summary.Ok}, Skipped={summary.Skipped}, " +
-                    $"UnknownFormat={summary.UnknownFormat}, IntegrityFailed={summary.IntegrityFailed}, " +
-                    $"Errors={summary.Errors}, Duration={summary.Duration}");
+                try
+                {
+                    var summary = await orchestrator.RunAsync(coreOptions, coordinator.Graceful, coordinator.Hard).ConfigureAwait(false);
 
-                return summary.HasFailures ? ExitFailures : ExitOk;
+                    Console.Out.WriteLine(
+                        $"Watch summary: Processed={summary.Processed}, Ok={summary.Ok}, Skipped={summary.Skipped}, " +
+                        $"UnknownFormat={summary.UnknownFormat}, IntegrityFailed={summary.IntegrityFailed}, " +
+                        $"Errors={summary.Errors}, Duration={summary.Duration}");
+
+                    if (coordinator.SignalCount > 0) { return ExitCancelled; }
+                    return summary.HasFailures ? ExitFailures : ExitOk;
+                }
+                catch (OperationCanceledException) when (coordinator.SignalCount > 0)
+                {
+                    // Hard-cancel mid-flight. WatchOrchestrator normally returns a partial summary
+                    // on cancel; this catch defends against any cancel-throw path that still leaks.
+                    logger.Warning("Watch aborted by user signal.");
+                    return ExitCancelled;
+                }
             }
             finally
             {
+                sigintRegistration?.Dispose();
+                sigtermRegistration?.Dispose();
+                coordinator?.Dispose();
                 if (scope is not null) { await scope.DisposeAsync().ConfigureAwait(false); }
                 if (container is not null) { await container.DisposeAsync().ConfigureAwait(false); }
             }
@@ -129,6 +163,48 @@ public sealed class WatchRunner
             // Flush + close all sinks (especially the rolling file sink).
             (logger as IDisposable)?.Dispose();
             Log.CloseAndFlush();
+        }
+    }
+
+    /// <summary>
+    /// Subscribes to <see cref="Console.CancelKeyPress"/> (Ctrl-C / SIGINT on all platforms).
+    /// We set <c>e.Cancel = true</c> so the default behavior (immediate process termination) is
+    /// suppressed and our coordinator's state machine gets to run. Returns an IDisposable that
+    /// unsubscribes the handler when the watch run completes.
+    /// </summary>
+    private static IDisposable SubscribeSigint(CancellationCoordinator coordinator)
+    {
+        ConsoleCancelEventHandler handler = (_, e) =>
+        {
+            e.Cancel = true;
+            coordinator.OnCancelRequested();
+        };
+        Console.CancelKeyPress += handler;
+        return new Unsubscriber(() => Console.CancelKeyPress -= handler);
+    }
+
+    /// <summary>
+    /// Subscribes to SIGTERM via <see cref="PosixSignalRegistration"/>. SIGTERM is conventionally
+    /// "stop now" for services — no grace period — so we route it to the hard signal path.
+    /// </summary>
+    private static IDisposable SubscribeSigterm(CancellationCoordinator coordinator)
+    {
+        var reg = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx =>
+        {
+            ctx.Cancel = true;
+            coordinator.OnHardSignalRequested();
+        });
+        return reg;
+    }
+
+    private sealed class Unsubscriber : IDisposable
+    {
+        private Action? _action;
+        public Unsubscriber(Action action) { _action = action; }
+        public void Dispose()
+        {
+            var a = Interlocked.Exchange(ref _action, null);
+            a?.Invoke();
         }
     }
 
