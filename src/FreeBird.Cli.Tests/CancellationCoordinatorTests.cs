@@ -197,4 +197,23 @@ public class CancellationCoordinatorTests
         var act = () => coord.Dispose();
         act.Should().NotThrow();
     }
+
+    [Fact]
+    public void Tokens_RemainAccessible_AfterDispose()
+    {
+        var (coord, _, _) = Build();
+        var graceful = coord.Graceful;
+        var hard = coord.Hard;
+        coord.OnCancelRequested();
+        coord.OnCancelRequested();  // hard cancel
+        coord.Dispose();
+
+        // These reads must not throw — they did before the N1 fix.
+        Action readGraceful = () => { _ = coord.Graceful.IsCancellationRequested; };
+        Action readHard = () => { _ = coord.Hard.IsCancellationRequested; };
+        readGraceful.Should().NotThrow();
+        readHard.Should().NotThrow();
+        coord.Graceful.IsCancellationRequested.Should().BeTrue(because: "cancelled state survives dispose");
+        coord.Hard.IsCancellationRequested.Should().BeTrue();
+    }
 }

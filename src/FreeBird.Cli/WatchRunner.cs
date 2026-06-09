@@ -145,8 +145,12 @@ public sealed class WatchRunner
         }
         catch (OperationCanceledException)
         {
-            logger.Warning("Watch cancelled.");
-            return ExitCancelled;
+            // An OCE escaped without a signal having been received — this would be a pre-RunAsync
+            // cancellation (e.g. container build aborted). Map to generic failure, not 130,
+            // because no SIGINT/SIGTERM was actually delivered to us. The signal-driven path is
+            // handled by the inner `when (coordinator.SignalCount > 0)` catch above.
+            logger.Warning("Watch cancelled outside the signal path.");
+            return ExitFailures;
         }
         catch (DirectoryNotFoundException ex)
         {

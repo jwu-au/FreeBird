@@ -26,8 +26,15 @@ namespace FreeBird.Cli;
 /// </summary>
 public sealed class CancellationCoordinator : IDisposable
 {
+    /// <summary>
+    /// Default grace period between first Ctrl-C (graceful) and forced hard abort.
+    /// </summary>
+    public static readonly TimeSpan DefaultGracePeriod = TimeSpan.FromSeconds(5);
+
     private readonly CancellationTokenSource _graceful = new();
     private readonly CancellationTokenSource _hard = new();
+    private readonly CancellationToken _gracefulToken;
+    private readonly CancellationToken _hardToken;
     private readonly TimeSpan _gracePeriod;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger _logger;
@@ -42,20 +49,25 @@ public sealed class CancellationCoordinator : IDisposable
         ArgumentNullException.ThrowIfNull(logger);
         _timeProvider = timeProvider;
         _logger = logger;
-        _gracePeriod = gracePeriod ?? TimeSpan.FromSeconds(5);
+        _gracePeriod = gracePeriod ?? DefaultGracePeriod;
+        // Cache tokens at construction. CancellationToken is a struct and remains valid (carrying
+        // any cancelled state) even after the underlying CTS has been disposed — so callers can
+        // still observe IsCancellationRequested post-Dispose.
+        _gracefulToken = _graceful.Token;
+        _hardToken = _hard.Token;
     }
 
     /// <summary>
     /// Cancelled on the first Ctrl-C. The orchestrator should observe this as "stop accepting
     /// new work; let in-flight items finish."
     /// </summary>
-    public CancellationToken Graceful => _graceful.Token;
+    public CancellationToken Graceful => _gracefulToken;
 
     /// <summary>
     /// Cancelled when either (a) the grace timer expires, (b) a second Ctrl-C arrives, or
     /// (c) a SIGTERM arrives. Forces in-flight work to abort.
     /// </summary>
-    public CancellationToken Hard => _hard.Token;
+    public CancellationToken Hard => _hardToken;
 
     /// <summary>
     /// Total number of shutdown signals received. Used by <see cref="WatchRunner"/> to map to
@@ -127,12 +139,25 @@ public sealed class CancellationCoordinator : IDisposable
         }
     }
 
-    private static void SafeCancel(CancellationTokenSource cts)
+    private void SafeCancel(CancellationTokenSource cts)
     {
         // Cancel() can throw AggregateException if a registered callback throws. We intentionally
         // swallow here because the coordinator must never propagate exceptions back into the OS
         // signal handler thread.
-        try { cts.Cancel(); } catch { /* intentional */ }
+        try
+        {
+            cts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Benign: CTS was already disposed (e.g. coordinator Dispose() raced with a signal).
+        }
+        catch (Exception ex)
+        {
+            // A registered cancellation callback threw. We can't propagate — we're on a signal
+            // handler thread — but at least log it so users have a debugging breadcrumb.
+            _logger.Warning(ex, "Suppressed exception while cancelling token");
+        }
     }
 
     public void Dispose()
