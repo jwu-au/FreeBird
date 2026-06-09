@@ -126,17 +126,21 @@ public sealed class WatchRunner
                     ? CoordinatorFactoryOverride(logger)
                     : new CancellationCoordinator(TimeProvider.System, logger);
 
-                // Wire OS signals → coordinator. If the external token fires, treat it as a
-                // graceful cancel (e.g. a host CTS triggered programmatically).
+                // Wire OS signals → coordinator. The external token is intentionally NOT
+                // bridged into coordinator.OnCancelRequested() — System.CommandLine 3.x installs
+                // its own SIGINT handler that cancels the action delegate's CT, so bridging it
+                // here would double-count signals (once via the bridge, once via our own
+                // Console.CancelKeyPress handler) and immediately escalate to hard abort,
+                // bypassing the 5s graceful drain. Instead, link the external token into the
+                // graceful token so an external host CTS still stops the orchestrator gracefully.
                 sigintRegistration = SubscribeSigint(coordinator);
                 sigtermRegistration = SubscribeSigterm(coordinator);
-                using var externalReg = externalToken.CanBeCanceled
-                    ? externalToken.Register(static c => ((CancellationCoordinator)c!).OnCancelRequested(), coordinator)
-                    : default;
+                using var linkedGraceful = CancellationTokenSource.CreateLinkedTokenSource(
+                    coordinator.Graceful, externalToken);
 
                 try
                 {
-                    var summary = await orchestrator.RunAsync(coreOptions, coordinator.Graceful, coordinator.Hard).ConfigureAwait(false);
+                    var summary = await orchestrator.RunAsync(coreOptions, linkedGraceful.Token, coordinator.Hard).ConfigureAwait(false);
 
                     Console.Out.WriteLine(
                         $"Watch summary: Processed={summary.Processed}, Ok={summary.Ok}, Skipped={summary.Skipped}, " +

@@ -334,4 +334,63 @@ public class WatchRunnerTests : IDisposable
         // The two tokens passed to the orchestrator must be distinct (different underlying CTS).
         capturedGraceful.Should().NotBe(capturedHard);
     }
+
+    // --- T19-fixup: external-token cancel must NOT bump CancellationCoordinator.SignalCount ---
+
+    [Fact]
+    public async Task Run_ExternalTokenCancelled_DoesNotIncrementCoordinatorSignalCount()
+    {
+        // Regression guard for the T19 production bug: System.CommandLine 3.x installs its own
+        // SIGINT handler that cancels the external token passed into RunAsync. If WatchRunner
+        // bridges that external token into CancellationCoordinator.OnCancelRequested(), a single
+        // real SIGINT increments SignalCount TWICE (once from the external bridge, once from
+        // Console.CancelKeyPress) and immediately escalates to hard abort, bypassing the 5s
+        // graceful drain entirely.
+        //
+        // Fix: external token cancellation must gracefully stop the runner without touching the
+        // coordinator's signal-count state machine. Only real OS signals (SIGINT/SIGTERM via the
+        // Subscribe* wiring) should bump SignalCount.
+        CancellationCoordinator? capturedCoord = null;
+        WatchRunner.CoordinatorFactoryOverride = log =>
+        {
+            var c = new CancellationCoordinator(TimeProvider.System, log);
+            capturedCoord = c;
+            return c;
+        };
+
+        var mock = new Mock<IWatchOrchestrator>();
+        mock.Setup(o => o.RunAsync(
+                It.IsAny<FreeBird.Core.Models.WatchOptions>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<CancellationToken>()))
+            .Returns<FreeBird.Core.Models.WatchOptions, CancellationToken, CancellationToken>(
+                async (_, gract, _) =>
+                {
+                    // Block until the graceful token fires, then return a clean summary —
+                    // emulating an orchestrator that respects graceful cancellation.
+                    try { await Task.Delay(Timeout.Infinite, gract); }
+                    catch (OperationCanceledException) { /* expected */ }
+                    return EmptySummary();
+                });
+        WatchRunner.OrchestratorFactoryOverride = _ => mock.Object;
+
+        using var cts = new CancellationTokenSource();
+        var runner = new WatchRunner();
+        var runTask = runner.RunAsync(MakeOpts(noLogFile: true), cts.Token);
+
+        // Give the runner a beat to register handlers and call into the orchestrator.
+        await Task.Delay(100);
+        cts.Cancel();
+        var exit = await runTask;
+
+        capturedCoord.Should().NotBeNull("the coordinator factory override should have run");
+        capturedCoord!.SignalCount.Should().Be(0,
+            because: "external-token cancellation must NOT bump SignalCount — only real OS " +
+                     "signals (SIGINT/SIGTERM) should. Otherwise System.CommandLine's own " +
+                     "SIGINT handler double-counts and immediately escalates to hard abort.");
+        // Because no real signal was delivered, exit code must NOT be 130. A clean orchestrator
+        // return with SignalCount==0 is exit 0.
+        exit.Should().Be(0,
+            because: "external cancel with no signals produces a clean summary and exit 0");
+    }
 }

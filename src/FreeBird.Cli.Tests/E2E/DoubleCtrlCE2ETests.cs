@@ -97,6 +97,18 @@ public class DoubleCtrlCE2ETests : IDisposable
             $"single SIGINT → graceful drain → exit code 130 (POSIX SIGINT convention). " +
             $"drain={sw.ElapsedMilliseconds}ms startup={startup.ElapsedMilliseconds}ms " +
             $"stdout=[{outBuf}] stderr=[{errBuf}]");
+
+        // T19-fixup regression guard: a single SIGINT must enter the graceful drain path but
+        // must NOT escalate to the double-Ctrl-C "Forced abort" branch. Pre-fix, System.CommandLine's
+        // own SIGINT handler caused the external token to fire alongside Console.CancelKeyPress,
+        // double-counting the signal and tripping the count==2 branch immediately.
+        string combined;
+        lock (outBuf) lock (errBuf) { combined = outBuf.ToString() + errBuf.ToString(); }
+        combined.Should().Contain("Graceful shutdown requested",
+            $"single SIGINT must trigger the count==1 graceful-shutdown log. stdout=[{outBuf}] stderr=[{errBuf}]");
+        combined.Should().NotContain("Forced abort requested (Ctrl-C pressed twice)",
+            $"single SIGINT must NOT trip the count==2 force-abort branch — that would be the " +
+            $"pre-fix double-bridge bug. stdout=[{outBuf}] stderr=[{errBuf}]");
     }
 
     [SkippableFact]
@@ -150,6 +162,19 @@ public class DoubleCtrlCE2ETests : IDisposable
         child.ExitCode.Should().Be(130,
             $"double SIGINT → hard abort → exit code 130 (POSIX SIGINT convention). " +
             $"drain={sw.ElapsedMilliseconds}ms startup={startup.ElapsedMilliseconds}ms " +
+            $"stdout=[{outBuf}] stderr=[{errBuf}]");
+
+        // T19-fixup regression guard: the first SIGINT must trip the graceful-shutdown log.
+        // The second SIGINT *may* trip the force-abort log, but with a small workload the
+        // orchestrator can graceful-drain and exit before the second signal arrives — that's a
+        // legitimate fast-path, not a bug. The strong invariant the fix preserves is: exit 130
+        // within 5s with a "Graceful shutdown requested" log emitted exactly once for each
+        // delivered SIGINT (verified pre-fix by the bug repro where a SINGLE SIGINT produced
+        // BOTH the graceful AND the force-abort log).
+        string combined;
+        lock (outBuf) lock (errBuf) { combined = outBuf.ToString() + errBuf.ToString(); }
+        combined.Should().Contain("Graceful shutdown requested",
+            $"at least the first SIGINT must log the graceful-shutdown line. " +
             $"stdout=[{outBuf}] stderr=[{errBuf}]");
     }
 
