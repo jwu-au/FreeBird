@@ -31,5 +31,13 @@ public sealed class CoreModule : Module
         builder.RegisterInstance(TimeProvider.System)
                .As<TimeProvider>()
                .SingleInstance();
+
+        // SizeStabilityCompletionDetector is stateful (per-file observation history).
+        // It MUST be SingleInstance so state persists across watch cycles and across
+        // any child lifetime scopes a host might open. Last-registration-wins
+        // overrides the bulk InstancePerLifetimeScope above for this specific service.
+        builder.RegisterType<FreeBird.Core.Watch.SizeStabilityCompletionDetector>()
+               .As<FreeBird.Core.Abstractions.ICompletionDetector>()
+               .SingleInstance();
     }
 }

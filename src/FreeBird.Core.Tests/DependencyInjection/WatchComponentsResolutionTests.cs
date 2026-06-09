@@ -79,4 +79,23 @@ public class WatchComponentsResolutionTests
         var act = () => container.Resolve<IWatchOrchestrator>();
         act.Should().NotThrow();
     }
+
+    [Fact]
+    public void CoreModule_ICompletionDetector_IsSingleInstance_AcrossScopes()
+    {
+        // SizeStabilityCompletionDetector holds per-file observation history in a
+        // ConcurrentDictionary. State MUST persist across watch cycles and across
+        // any child lifetime scopes a host opens — otherwise no file is ever
+        // judged stable and the orchestrator processes nothing.
+        using var container = BuildContainer();
+        using var scopeA = container.BeginLifetimeScope();
+        using var scopeB = container.BeginLifetimeScope();
+
+        var fromA = scopeA.Resolve<ICompletionDetector>();
+        var fromB = scopeB.Resolve<ICompletionDetector>();
+        var fromRoot = container.Resolve<ICompletionDetector>();
+
+        fromA.Should().BeSameAs(fromB, because: "detector state must persist across all lifetime scopes");
+        fromA.Should().BeSameAs(fromRoot, because: "child scope and root scope must share the singleton");
+    }
 }
