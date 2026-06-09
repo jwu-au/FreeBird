@@ -1,5 +1,7 @@
 using System;
+using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -8,7 +10,9 @@ using FreeBird.Core.Decoding;
 using FreeBird.Core.Infrastructure;
 using FreeBird.Core.Models;
 using FreeBird.Core.Processing;
+using FreeBird.Core.Sidecar;
 using Moq;
+using Serilog;
 using Fx = FreeBird.Core.Tests.Fixtures.Fixtures;
 
 namespace FreeBird.Core.Tests.Processing;
@@ -63,7 +67,8 @@ public class FileProcessorTests : IDisposable
                    await output.WriteAsync(new byte[] { 1, 2, 3, 4 }, ct);
                });
 
-        var sut = new FileProcessor(decoder.Object, sniffer.Object, naming.Object, integrity.Object, writer.Object);
+        var logger = new Mock<ILogger>().Object;
+        var sut = new FileProcessor(decoder.Object, sniffer.Object, naming.Object, integrity.Object, writer.Object, logger);
         return (sut, decoder, sniffer, naming, integrity, writer);
     }
 
@@ -233,12 +238,14 @@ public class FileProcessorTests : IDisposable
         var n = new Mock<INamingStrategy>().Object;
         var i = new Mock<ICompositeIntegrityChecker>().Object;
         var w = new Mock<IAtomicFileWriter>().Object;
+        var l = new Mock<ILogger>().Object;
 
-        ((Action)(() => _ = new FileProcessor(null!, s, n, i, w))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, null!, n, i, w))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, null!, i, w))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, n, null!, w))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, n, i, null!))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(null!, s, n, i, w, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, null!, n, i, w, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, null!, i, w, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, null!, w, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, null!, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, null!))).Should().Throw<ArgumentNullException>();
     }
 
     // --- INTEGRATION test: real fixtures + real decoder/sniffer/naming/writer, mocked composite ---
@@ -259,7 +266,8 @@ public class FileProcessorTests : IDisposable
             new MagicByteFormatSniffer(),
             new StemPlusExtensionNamingStrategy(),
             integrity.Object,
-            new AtomicFileWriter());
+            new AtomicFileWriter(),
+            new Mock<ILogger>().Object);
 
         var result = await sut.ProcessAsync(ucPath, DefaultOptions());
 
@@ -295,10 +303,10 @@ public class FileProcessorTests : IDisposable
         capturedPath.Should().EndWith(".mp3", "integrity must see staging file with proper extension for TagLib/flac to identify format");
     }
 
-    // --- T15.6 D5: sidecar contains all 5 spec'd fields ---
+    // --- T15.6 D5 (extended for v2 T05): sidecar contains all 7 spec'd fields ---
 
     [Fact]
-    public async Task ProcessAsync_QuarantineSidecar_ContainsAllFiveSpecFields()
+    public async Task ProcessAsync_QuarantineSidecar_ContainsAllSevenSpecFields()
     {
         var (sut, _, sniffer, naming, integrity, _) = MakeMockedSut();
         var ucPath = await MakeUcFileAsync("77-meta.uc");
@@ -312,17 +320,187 @@ public class FileProcessorTests : IDisposable
 
         result.Outcome.Should().Be(ScanOutcome.IntegrityFailed);
         var sidecar = await File.ReadAllTextAsync(result.OutputPath + ".txt");
-        // All 5 spec'd labels must appear
+        // All 5 v1 spec'd labels must appear
         sidecar.Should().Contain("timestamp:");
         sidecar.Should().Contain("source:");
         sidecar.Should().Contain("format:");
         sidecar.Should().Contain("integrity:");
         sidecar.Should().Contain("reason:");
+        // v2 fields must also appear
+        sidecar.Should().Contain("source_size:");
+        sidecar.Should().Contain("source_mtime:");
         // And values
         sidecar.Should().Contain(ucPath);                 // source value
         sidecar.Should().Contain("Flac");                 // format value
         sidecar.Should().Contain("L3");                   // integrity value
         sidecar.Should().Contain("PCM-MD5 mismatch");     // reason value
+    }
+
+    // --- v2 T05 tests: source_size + source_mtime ---
+
+    [Fact]
+    public async Task ProcessAsync_QuarantineSidecar_SourceSize_MatchesActualBytes()
+    {
+        var (sut, _, sniffer, naming, integrity, _) = MakeMockedSut();
+        // MakeUcFileAsync writes 4 bytes (0xEA, 0xE7, 0x90, 0x00)
+        var ucPath = await MakeUcFileAsync("size-check.uc");
+        var expectedSize = new FileInfo(ucPath).Length;
+        expectedSize.Should().Be(4);
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        naming.Setup(n => n.GetOutputFileName(ucPath, AudioFormat.Flac)).Returns("size-check.flac");
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Failed(IntegrityLevel.L1, "bad"));
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+
+        result.Outcome.Should().Be(ScanOutcome.IntegrityFailed);
+        var sidecar = await File.ReadAllTextAsync(result.OutputPath + ".txt");
+        sidecar.Should().Contain($"source_size: {expectedSize}");
+    }
+
+    [Fact]
+    public async Task ProcessAsync_QuarantineSidecar_SourceSize_IsBase10NoSeparators()
+    {
+        var (sut, _, sniffer, naming, integrity, _) = MakeMockedSut();
+        // Write a larger payload so the size is > 1000 and would format with separators under some cultures
+        var path = Path.Combine(_inputDir, "big.uc");
+        await File.WriteAllBytesAsync(path, new byte[1234567]);
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
+        naming.Setup(n => n.GetOutputFileName(path, AudioFormat.Mp3)).Returns("big.mp3");
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Failed(IntegrityLevel.L1, "bad"));
+
+        var result = await sut.ProcessAsync(path, DefaultOptions());
+
+        result.Outcome.Should().Be(ScanOutcome.IntegrityFailed);
+        var sidecar = await File.ReadAllTextAsync(result.OutputPath + ".txt");
+        sidecar.Should().Contain("source_size: 1234567");
+        // No thousands separators in any culture
+        sidecar.Should().NotContain("1,234,567");
+        sidecar.Should().NotContain("1.234.567");
+    }
+
+    [Fact]
+    public async Task ProcessAsync_QuarantineSidecar_SourceMtime_IsIsoRoundTrip_WithUtcOffset()
+    {
+        var (sut, _, sniffer, naming, integrity, _) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("mtime-check.uc");
+        var expectedMtime = new DateTimeOffset(File.GetLastWriteTimeUtc(ucPath), TimeSpan.Zero);
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
+        naming.Setup(n => n.GetOutputFileName(ucPath, AudioFormat.Mp3)).Returns("mtime-check.mp3");
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Failed(IntegrityLevel.L1, "bad"));
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+
+        result.Outcome.Should().Be(ScanOutcome.IntegrityFailed);
+        var sidecar = await File.ReadAllTextAsync(result.OutputPath + ".txt");
+        // Parse out the source_mtime line, verify it round-trips back to a DateTimeOffset
+        var mtimeLine = sidecar.Split('\n').FirstOrDefault(l => l.StartsWith("source_mtime:"));
+        mtimeLine.Should().NotBeNull();
+        var value = mtimeLine!.Substring("source_mtime:".Length).Trim();
+        DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed)
+            .Should().BeTrue();
+        // Must be UTC offset (the "o" format on a UTC DateTimeOffset emits +00:00)
+        value.Should().EndWith("+00:00");
+        // Should equal what we observed on disk (within ticks tolerance)
+        parsed.Should().BeCloseTo(expectedMtime, TimeSpan.FromMilliseconds(1));
+    }
+
+    [Fact]
+    public async Task ProcessAsync_QuarantineSidecar_RoundTrip_ReadableByTextSidecarReader_AllSevenFieldsMatch()
+    {
+        var (sut, _, sniffer, naming, integrity, _) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("roundtrip.uc");
+        var expectedSize = new FileInfo(ucPath).Length;
+        var expectedMtime = new DateTimeOffset(File.GetLastWriteTimeUtc(ucPath), TimeSpan.Zero);
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        naming.Setup(n => n.GetOutputFileName(ucPath, AudioFormat.Flac)).Returns("roundtrip.flac");
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Failed(IntegrityLevel.L3, "PCM-MD5 mismatch"));
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions(IntegrityLevel.L3));
+
+        result.Outcome.Should().Be(ScanOutcome.IntegrityFailed);
+
+        var reader = new TextSidecarReader();
+        var record = await reader.TryReadAsync(result.OutputPath + ".txt");
+
+        record.Should().NotBeNull();
+        record!.Source.Should().Be(ucPath);
+        record.Format.Should().Be(AudioFormat.Flac);
+        record.IntegrityLevel.Should().Be(IntegrityLevel.L3);
+        record.Reason.Should().Be("PCM-MD5 mismatch");
+        record.SourceSize.Should().Be(expectedSize);
+        record.SourceMtime.Should().NotBeNull();
+        record.SourceMtime!.Value.Should().BeCloseTo(expectedMtime, TimeSpan.FromMilliseconds(1));
+        // Timestamp must be a recent UTC time (within the last minute)
+        record.Timestamp.Should().BeCloseTo(DateTimeOffset.UtcNow, TimeSpan.FromMinutes(1));
+    }
+
+    [Fact]
+    public void BuildSidecarContent_SourceMissing_WritesZeroSizeEpochMtime()
+    {
+        // Test the internal sidecar builder directly with a non-existent source path.
+        var missing = Path.Combine(_tempDir, "definitely-not-there.uc");
+        File.Exists(missing).Should().BeFalse();
+
+        var content = FileProcessor.BuildSidecarContentForTesting(
+            missing, AudioFormat.Mp3, IntegrityLevel.L1, "test reason",
+            new Mock<ILogger>().Object);
+
+        content.Should().Contain("source_size: 0");
+        content.Should().Contain("source_mtime: 1970-01-01T00:00:00.0000000+00:00");
+    }
+
+    [Fact]
+    public void BuildSidecarContent_SourceMissing_LogsWarning()
+    {
+        var missing = Path.Combine(_tempDir, "vanished.uc");
+        var logger = new Mock<ILogger>();
+
+        _ = FileProcessor.BuildSidecarContentForTesting(
+            missing, AudioFormat.Mp3, IntegrityLevel.L1, "r", logger.Object);
+
+        // The Serilog call site is Warning<string>(string template, string propertyValue) — the
+        // generic single-arg overload. Verify against that exact shape.
+        logger.Verify(
+            l => l.Warning<string>(
+                It.Is<string>(s => s.Contains("vanished")),
+                It.IsAny<string>()),
+            Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public void BuildSidecarContent_FieldsAppearInExpectedOrder()
+    {
+        var path = Path.Combine(_tempDir, "order.uc");
+        File.WriteAllBytes(path, new byte[42]);
+
+        var content = FileProcessor.BuildSidecarContentForTesting(
+            path, AudioFormat.Flac, IntegrityLevel.L3, "reason here",
+            new Mock<ILogger>().Object);
+
+        var idxTimestamp    = content.IndexOf("timestamp:", StringComparison.Ordinal);
+        var idxSource       = content.IndexOf("source:", StringComparison.Ordinal);
+        var idxFormat       = content.IndexOf("format:", StringComparison.Ordinal);
+        var idxIntegrity    = content.IndexOf("integrity:", StringComparison.Ordinal);
+        var idxReason       = content.IndexOf("reason:", StringComparison.Ordinal);
+        var idxSourceSize   = content.IndexOf("source_size:", StringComparison.Ordinal);
+        var idxSourceMtime  = content.IndexOf("source_mtime:", StringComparison.Ordinal);
+
+        // All present
+        idxTimestamp.Should().BeGreaterThanOrEqualTo(0);
+        idxSource.Should().BeGreaterThan(idxTimestamp);
+        idxFormat.Should().BeGreaterThan(idxSource);
+        idxIntegrity.Should().BeGreaterThan(idxFormat);
+        idxReason.Should().BeGreaterThan(idxIntegrity);
+        idxSourceSize.Should().BeGreaterThan(idxReason);
+        idxSourceMtime.Should().BeGreaterThan(idxSourceSize);
     }
 
     // --- T15.6 D6: .uc! quarantine name strips suffix correctly ---

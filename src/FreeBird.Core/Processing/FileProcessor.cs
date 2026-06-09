@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Threading;
@@ -6,6 +7,7 @@ using System.Threading.Tasks;
 using FreeBird.Core.Abstractions;
 using FreeBird.Core.Decoding;
 using FreeBird.Core.Models;
+using Serilog;
 
 namespace FreeBird.Core.Processing;
 
@@ -23,19 +25,22 @@ public sealed class FileProcessor : IFileProcessor
     private readonly INamingStrategy _naming;
     private readonly ICompositeIntegrityChecker _integrity;
     private readonly IAtomicFileWriter _writer;
+    private readonly ILogger _logger;
 
     public FileProcessor(
         IXorDecoder decoder,
         IFormatSniffer sniffer,
         INamingStrategy naming,
         ICompositeIntegrityChecker integrity,
-        IAtomicFileWriter writer)
+        IAtomicFileWriter writer,
+        ILogger logger)
     {
         _decoder = decoder ?? throw new ArgumentNullException(nameof(decoder));
         _sniffer = sniffer ?? throw new ArgumentNullException(nameof(sniffer));
         _naming = naming ?? throw new ArgumentNullException(nameof(naming));
         _integrity = integrity ?? throw new ArgumentNullException(nameof(integrity));
         _writer = writer ?? throw new ArgumentNullException(nameof(writer));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task<ScanResult> ProcessAsync(
@@ -173,11 +178,11 @@ public sealed class FileProcessor : IFileProcessor
     }
 
     /// <summary>
-    /// Move the staging file into the failed/quarantine directory and write the spec'd 5-field
+    /// Move the staging file into the failed/quarantine directory and write the spec'd 7-field
     /// sidecar metadata next to it. The sidecar is written first to a `.tmp` file so that if any
     /// step fails the staging file is not stranded with no record (C1 ship-blocker).
     /// </summary>
-    private static string QuarantineFile(
+    private string QuarantineFile(
         string stagingPath,
         string failedDir,
         string fileName,
@@ -190,7 +195,7 @@ public sealed class FileProcessor : IFileProcessor
         var dest = Path.Combine(failedDir, fileName);
         var sidecarPath = dest + ".txt";
         var sidecarTmp = sidecarPath + ".tmp";
-        var sidecarContent = BuildSidecarContent(sourcePath, format, levelApplied, reason);
+        var sidecarContent = BuildSidecarContent(sourcePath, format, levelApplied, reason, _logger);
 
         // 1) Write sidecar to a .tmp file first — if this fails, the staging file remains in place.
         File.WriteAllText(sidecarTmp, sidecarContent);
@@ -215,20 +220,67 @@ public sealed class FileProcessor : IFileProcessor
         return dest;
     }
 
-    private static string BuildSidecarContent(
+    /// <summary>
+    /// Build the 7-field v2 sidecar content. Fields 1–5 mirror v1; <c>source_size</c> and
+    /// <c>source_mtime</c> are added for v2 watch-mode skip decisions (T07).
+    ///
+    /// Race-handling (per brainstorm Q-Amb-3): if the source file has vanished between decrypt
+    /// and sidecar-write, we still emit a sidecar but with size=0 and mtime=epoch. This guarantees
+    /// the user has a record of the failure even if the source is gone; the unusual values let the
+    /// future <c>FilesystemSkipDecider</c> treat the sidecar as "never matches a real file".
+    /// </summary>
+    internal static string BuildSidecarContent(
         string sourcePath,
         AudioFormat format,
         IntegrityLevel? levelApplied,
-        string reason)
+        string reason,
+        ILogger logger)
     {
+        long sourceSize;
+        DateTimeOffset sourceMtime;
+        try
+        {
+            var info = new FileInfo(sourcePath);
+            if (info.Exists)
+            {
+                sourceSize = info.Length;
+                sourceMtime = new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero);
+            }
+            else
+            {
+                logger.Warning("Source file vanished before sidecar write: {SourcePath}", sourcePath);
+                sourceSize = 0;
+                sourceMtime = DateTimeOffset.UnixEpoch;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.Warning(ex, "Failed to stat source file before sidecar write: {SourcePath}", sourcePath);
+            sourceSize = 0;
+            sourceMtime = DateTimeOffset.UnixEpoch;
+        }
+
         var sb = new StringBuilder();
         sb.Append("timestamp: ").AppendLine(DateTime.UtcNow.ToString("O"));
         sb.Append("source:    ").AppendLine(sourcePath);
         sb.Append("format:    ").AppendLine(format.ToString());
         sb.Append("integrity: ").AppendLine(levelApplied?.ToString() ?? "-");
         sb.Append("reason:    ").AppendLine(reason);
+        sb.Append("source_size: ").AppendLine(sourceSize.ToString(CultureInfo.InvariantCulture));
+        sb.Append("source_mtime: ").AppendLine(sourceMtime.ToString("O", CultureInfo.InvariantCulture));
         return sb.ToString();
     }
+
+    /// <summary>
+    /// Test-only forwarder. Internal access is granted via <c>InternalsVisibleTo</c>.
+    /// </summary>
+    internal static string BuildSidecarContentForTesting(
+        string sourcePath,
+        AudioFormat format,
+        IntegrityLevel? levelApplied,
+        string reason,
+        ILogger logger)
+        => BuildSidecarContent(sourcePath, format, levelApplied, reason, logger);
 
     private static void TryDelete(string path)
     {
