@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -8,6 +9,7 @@ using FreeBird.Core.Abstractions;
 using FreeBird.Core.DependencyInjection;
 using FreeBird.Core.Models;
 using Serilog;
+using Serilog.Core;
 using Serilog.Events;
 
 namespace FreeBird.Cli;
@@ -42,6 +44,24 @@ public sealed class WatchRunner
     /// without involving real OS signals.
     /// </summary>
     public static Func<ILogger, CancellationCoordinator>? CoordinatorFactoryOverride { get; set; }
+
+    /// <summary>
+    /// Test-only hook (v2 T18): additional Serilog sinks appended to the runner's
+    /// <see cref="LoggerConfiguration"/> alongside the default console (and optional file) sinks.
+    /// Used by <c>CycleLockE2ETests</c> to capture every emitted <c>LogEvent</c> via an
+    /// in-memory sink and assert on the debounced WARN/DEBUG skip-poll sequence.
+    /// Defaults to an empty list — production behavior is unaffected.
+    /// </summary>
+    public static List<ILogEventSink> AdditionalLogSinks { get; } = new();
+
+    /// <summary>
+    /// Test-only hook (v2 T18): if non-null, invoked against the Autofac
+    /// <see cref="ContainerBuilder"/> after <c>CoreModule</c> + the logger instance have
+    /// been registered but before <c>Build()</c>. Lets tests override individual
+    /// registrations (e.g. swap in a slow <see cref="IFileProcessor"/>) while keeping
+    /// the rest of the real wiring intact.
+    /// </summary>
+    public static Action<ContainerBuilder>? AdditionalContainerSetup { get; set; }
 
     public async Task<int> RunAsync(WatchOptions cliOptions, CancellationToken externalToken = default)
     {
@@ -239,6 +259,13 @@ public sealed class WatchRunner
                 outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}");
         }
 
+        // T18 test hook: append any extra sinks (e.g. InMemoryLogSink). Snapshot to avoid
+        // races with tests mutating the list mid-build.
+        foreach (var extraSink in AdditionalLogSinks.ToArray())
+        {
+            config = config.WriteTo.Sink(extraSink);
+        }
+
         return config.CreateLogger();
     }
 
@@ -272,6 +299,10 @@ public sealed class WatchRunner
         var builder = new ContainerBuilder();
         builder.RegisterModule<CoreModule>();
         builder.RegisterInstance(logger).As<ILogger>().SingleInstance();
+        // T18 test hook: let tests override individual registrations after the default
+        // wiring is in place (Autofac's last-registration-wins behavior makes the override
+        // resolve in preference to the CoreModule default).
+        AdditionalContainerSetup?.Invoke(builder);
         return builder.Build();
     }
 }
