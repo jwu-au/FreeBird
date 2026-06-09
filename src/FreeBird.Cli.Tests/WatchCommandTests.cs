@@ -8,9 +8,12 @@ using FreeBird.Core.Models;
 namespace FreeBird.Cli.Tests;
 
 /// <summary>
-/// T10 — fb watch CLI subcommand option parsing + validation tests (placeholder handler).
-/// The handler does not run the watch loop; T11 wires WatchRunner.
+/// T10 — fb watch CLI subcommand option parsing + validation tests.
+/// Uses <see cref="WatchCommand.HandlerOverride"/> so the real WatchRunner / watch loop
+/// never runs during these tests. Shares <c>ConsoleRedirect</c> collection with
+/// <see cref="WatchRunnerTests"/> to prevent races on <c>Console.Out</c>.
 /// </summary>
+[Collection("ConsoleRedirect")]
 public class WatchCommandTests : IDisposable
 {
     private readonly string _tempDir;
@@ -51,16 +54,27 @@ public class WatchCommandTests : IDisposable
         }
     }
 
-    // 1. Happy path — required options + defaults → placeholder success.
+    // 1. Happy path — required options + defaults → handler invoked with correct paths.
+    // (Uses HandlerOverride so the real WatchRunner / watch loop never executes.)
     [Fact]
-    public async Task Watch_RequiredOptionsOnly_Succeeds_PrintsPlaceholder()
+    public async Task Watch_RequiredOptionsOnly_Succeeds_InvokesHandler()
     {
-        var (exit, stdout, _) = await InvokeAsync("watch", _inputDir, "--output", _outputDir);
+        WatchOptions? captured = null;
+        var origHandler = WatchCommand.HandlerOverride;
+        WatchCommand.HandlerOverride = opts => { captured = opts; return Task.FromResult(0); };
+        try
+        {
+            var (exit, _, _) = await InvokeAsync("watch", _inputDir, "--output", _outputDir);
 
-        exit.Should().Be(0);
-        stdout.Should().Contain("Would watch");
-        stdout.Should().Contain(_inputDir);
-        stdout.Should().Contain(_outputDir);
+            exit.Should().Be(0);
+            captured.Should().NotBeNull();
+            captured!.InputDir.Should().Be(_inputDir);
+            captured.OutputDir.Should().Be(_outputDir);
+        }
+        finally
+        {
+            WatchCommand.HandlerOverride = origHandler;
+        }
     }
 
     // 2. Missing positional input arg → exit 2 (usage error).

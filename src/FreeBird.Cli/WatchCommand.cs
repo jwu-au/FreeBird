@@ -8,8 +8,8 @@ namespace FreeBird.Cli;
 
 /// <summary>
 /// Builds the `fb watch` System.CommandLine subcommand and translates parsed args
-/// into a <see cref="WatchOptions"/> instance. T10 ships a placeholder handler;
-/// T11 replaces it with a real WatchRunner invocation.
+/// into a <see cref="WatchOptions"/> instance. The action delegates to
+/// <see cref="WatchRunner"/> to run the watch loop (T11).
 /// </summary>
 public static class WatchCommand
 {
@@ -19,7 +19,8 @@ public static class WatchCommand
 
     /// <summary>
     /// Test-only hook: if non-null, the command handler invokes this delegate instead of
-    /// the default placeholder. Tests use this to capture the parsed <see cref="WatchOptions"/>.
+    /// the real <see cref="WatchRunner"/>. Tests use this to capture the parsed
+    /// <see cref="WatchOptions"/> without running the watch loop.
     /// </summary>
     public static Func<WatchOptions, Task<int>>? HandlerOverride { get; set; }
 
@@ -118,7 +119,6 @@ public static class WatchCommand
 
         watchCommand.SetAction(async (parseResult, ct) =>
         {
-            _ = ct; // T11 will use this for graceful shutdown
             var input = parseResult.GetValue(inputArg)!;
             var output = parseResult.GetValue(outputOpt)!;
             var integrity = parseResult.GetValue(integrityOpt);
@@ -223,21 +223,15 @@ public static class WatchCommand
                 Quiet = quiet,
             };
 
-            var handler = HandlerOverride ?? DefaultPlaceholderHandler;
-            return await handler(opts);
+            if (HandlerOverride is not null)
+            {
+                return await HandlerOverride(opts);
+            }
+
+            var runner = new WatchRunner();
+            return await runner.RunAsync(opts, ct);
         });
 
         return watchCommand;
-    }
-
-    private static Task<int> DefaultPlaceholderHandler(WatchOptions opts)
-    {
-        Console.Out.WriteLine(
-            $"Would watch {opts.InputDir} -> {opts.OutputDir} with poll={opts.PollInterval.TotalSeconds}s " +
-            $"checks={opts.StabilityChecks} concurrency={opts.Concurrency} integrity={opts.Integrity} " +
-            $"collision={opts.Collision} min-size={opts.MinFileSize} skip-initial={opts.SkipInitialScan} " +
-            $"log-file={(opts.LogFilePath ?? "<default>")} no-log-file={opts.NoLogFile} " +
-            $"verbose={opts.Verbose} quiet={opts.Quiet}");
-        return Task.FromResult(ExitOk);
     }
 }
