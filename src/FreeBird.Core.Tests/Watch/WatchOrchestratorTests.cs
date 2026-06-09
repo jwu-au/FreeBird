@@ -553,4 +553,99 @@ public sealed class WatchOrchestratorTests : IDisposable
         ((Action)(() => _ = new WatchOrchestrator(scan, det, dec, proc, null!, log))).Should().Throw<ArgumentNullException>();
         ((Action)(() => _ = new WatchOrchestrator(scan, det, dec, proc, clk, null!))).Should().Throw<ArgumentNullException>();
     }
+
+    // --- Enumeration scope: non-recursive + extension filter ---
+
+    [Fact]
+    public async Task RunAsync_FilesInSubdir_NotEnumerated()
+    {
+        var (sut, _, detector, _, _, clock, _) = MakeSut();
+        var options = MakeOptions(pollInterval: TimeSpan.FromSeconds(5), skipInitialScan: true);
+
+        // Arrange: put a .uc file in a subdirectory of input
+        var subdir = Path.Combine(_inputDir, "subdir");
+        Directory.CreateDirectory(subdir);
+        var subdirFile = Path.Combine(subdir, "hidden.uc");
+        await File.WriteAllBytesAsync(subdirFile, new byte[2048]);
+
+        using var soft = new CancellationTokenSource();
+        var runTask = sut.RunAsync(options, soft.Token, CancellationToken.None);
+
+        await AdvanceAndYieldAsync(clock, TimeSpan.FromSeconds(5));
+        soft.Cancel();
+        await runTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Assert: completion detector was NEVER asked about the subdir file
+        detector.Verify(d => d.IsStableAsync(
+            It.Is<string>(p => p.Contains("subdir")),
+            It.IsAny<int>(),
+            It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task RunAsync_NonUcFiles_Ignored()
+    {
+        var (sut, _, detector, _, _, clock, _) = MakeSut();
+        var options = MakeOptions(pollInterval: TimeSpan.FromSeconds(5), skipInitialScan: true);
+
+        // Arrange: put a .mp3 and a .txt in input
+        await File.WriteAllBytesAsync(Path.Combine(_inputDir, "already.mp3"), new byte[2048]);
+        await File.WriteAllTextAsync(Path.Combine(_inputDir, "notes.txt"), "hello");
+
+        using var soft = new CancellationTokenSource();
+        var runTask = sut.RunAsync(options, soft.Token, CancellationToken.None);
+
+        await AdvanceAndYieldAsync(clock, TimeSpan.FromSeconds(5));
+        soft.Cancel();
+        await runTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        detector.Verify(d => d.IsStableAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // --- Partial-summary regression: graceful cancel mid-cycle still reports completed files ---
+
+    [Fact]
+    public async Task RunAsync_GracefulCancellation_DuringParallelPhase_PartialSummaryStillReported()
+    {
+        // Two files in input dir. One completes immediately; the second hangs forever.
+        // We hard-cancel after the first completes — the partial counts from the aborted
+        // cycle must still flow into the final summary.
+        var (sut, _, _, _, processor, clock, _) = MakeSut();
+        var options = MakeOptions(pollInterval: TimeSpan.FromMilliseconds(50), skipInitialScan: true, concurrency: 2);
+
+        var fileA = await TouchUc("a.uc");
+        var fileB = await TouchUc("b.uc");
+
+        var fileACompleted = new TaskCompletionSource();
+        processor.Reset();
+        processor.Setup(p => p.ProcessAsync(fileA, It.IsAny<ScanOptions>(), It.IsAny<CancellationToken>()))
+                 .Returns<string, ScanOptions, CancellationToken>((_, _, _) =>
+                 {
+                     fileACompleted.TrySetResult();
+                     return Task.FromResult(new ScanResult(fileA, ScanOutcome.Ok, AudioFormat.Mp3, fileA + ".mp3"));
+                 });
+        processor.Setup(p => p.ProcessAsync(fileB, It.IsAny<ScanOptions>(), It.IsAny<CancellationToken>()))
+                 .Returns<string, ScanOptions, CancellationToken>(async (_, _, ct) =>
+                 {
+                     await Task.Delay(Timeout.Infinite, ct);
+                     return null!;  // unreachable
+                 });
+
+        using var soft = new CancellationTokenSource();
+        using var hard = new CancellationTokenSource();
+        var runTask = sut.RunAsync(options, soft.Token, hard.Token);
+
+        await AdvanceAndYieldAsync(clock, TimeSpan.FromMilliseconds(50));
+        await fileACompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.Delay(50);
+        hard.Cancel();
+        soft.Cancel();
+
+        var summary = await runTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // KEY ASSERTION: file A's success was reported into the summary,
+        // even though the cycle as a whole was aborted by hard cancel.
+        summary.Ok.Should().Be(1, because: "file A completed before cancel; partial cycle counts must survive");
+    }
 }

@@ -198,97 +198,108 @@ public sealed class WatchOrchestrator : IWatchOrchestrator
             return;
         }
 
-        // For each candidate: detect stability, then ask the skip-decider.
+        // Counters accumulate over BOTH the enumerate phase and the parallel-process phase.
+        // The try/finally ensures that even if cancellation (or any other exception) aborts
+        // either phase mid-flight, the partial counts that DID accumulate get reported into
+        // the summary instead of being silently dropped.
+        var counters = new CycleCounters();
         var readyToProcess = new List<string>();
-        foreach (var path in candidates)
+        try
         {
-            softCt.ThrowIfCancellationRequested();
-
-            bool stable;
-            try
+            // For each candidate: detect stability, then ask the skip-decider.
+            foreach (var path in candidates)
             {
-                stable = await _completionDetector.IsStableAsync(path, options.StabilityChecks, softCt).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                _logger.Warning(ex, "Watch: completion detector failed for {Path}; skipping this cycle", path);
-                continue;
-            }
+                softCt.ThrowIfCancellationRequested();
 
-            if (!stable)
-            {
-                _logger.Debug("Watch: {Path} not yet stable; will retry next cycle", path);
-                continue;
-            }
-
-            SkipDecision decision;
-            try
-            {
-                decision = await _skipDecider.DecideAsync(path, options, softCt).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                _logger.Warning(ex, "Watch: skip-decider failed for {Path}; treating as Process", path);
-                decision = SkipDecision.Process();
-            }
-
-            if (!decision.ShouldProcess)
-            {
-                _logger.Debug("Watch: skipping {Path} (reason={Reason}, detail={Detail})",
-                    path, decision.Reason, decision.Detail);
-                _completionDetector.Forget(path);
-                continue;
-            }
-
-            readyToProcess.Add(path);
-        }
-
-        if (readyToProcess.Count == 0)
-        {
-            return;
-        }
-
-        var counters = new CycleCounters { Processed = readyToProcess.Count };
-        var scanOptions = ToScanOptions(options);
-        var parallelOptions = new ParallelOptions
-        {
-            MaxDegreeOfParallelism = Math.Max(1, options.Concurrency),
-            CancellationToken = hardCt,
-        };
-
-        await Parallel.ForEachAsync(readyToProcess, parallelOptions, async (path, ct) =>
-        {
-            try
-            {
-                var result = await _fileProcessor.ProcessAsync(path, scanOptions, ct).ConfigureAwait(false);
-                LogResult(result);
-                switch (result.Outcome)
+                bool stable;
+                try
                 {
-                    case ScanOutcome.Ok: Interlocked.Increment(ref counters.Ok); break;
-                    case ScanOutcome.Skipped: Interlocked.Increment(ref counters.Skipped); break;
-                    case ScanOutcome.UnknownFormat: Interlocked.Increment(ref counters.Unknown); break;
-                    case ScanOutcome.IntegrityFailed: Interlocked.Increment(ref counters.IntegrityFailed); break;
-                    case ScanOutcome.Error: Interlocked.Increment(ref counters.Errors); break;
+                    stable = await _completionDetector.IsStableAsync(path, options.StabilityChecks, softCt).ConfigureAwait(false);
                 }
-                // Freshness reset: forget tracked state for files we just acted on, unless we deliberately
-                // chose to keep them around (only Skipped means "deferred to v1 collision policy" — even then
-                // the file may be replaced later by a new download, so forget is correct).
-                _completionDetector.Forget(path);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                Interlocked.Increment(ref counters.Errors);
-                _logger.Error(ex, "Watch: unhandled error processing {Path}", path);
-            }
-        }).ConfigureAwait(false);
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    _logger.Warning(ex, "Watch: completion detector failed for {Path}; skipping this cycle", path);
+                    continue;
+                }
 
-        reporter(counters);
+                if (!stable)
+                {
+                    _logger.Debug("Watch: {Path} not yet stable; will retry next cycle", path);
+                    continue;
+                }
+
+                SkipDecision decision;
+                try
+                {
+                    decision = await _skipDecider.DecideAsync(path, options, softCt).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    _logger.Warning(ex, "Watch: skip-decider failed for {Path}; treating as Process", path);
+                    decision = SkipDecision.Process();
+                }
+
+                if (!decision.ShouldProcess)
+                {
+                    _logger.Debug("Watch: skipping {Path} (reason={Reason}, detail={Detail})",
+                        path, decision.Reason, decision.Detail);
+                    _completionDetector.Forget(path);
+                    continue;
+                }
+
+                readyToProcess.Add(path);
+            }
+
+            if (readyToProcess.Count == 0)
+            {
+                return;
+            }
+
+            counters.Processed = readyToProcess.Count;
+            var scanOptions = ToScanOptions(options);
+            var parallelOptions = new ParallelOptions
+            {
+                MaxDegreeOfParallelism = Math.Max(1, options.Concurrency),
+                CancellationToken = hardCt,
+            };
+
+            await Parallel.ForEachAsync(readyToProcess, parallelOptions, async (path, ct) =>
+            {
+                try
+                {
+                    var result = await _fileProcessor.ProcessAsync(path, scanOptions, ct).ConfigureAwait(false);
+                    LogResult(result);
+                    switch (result.Outcome)
+                    {
+                        case ScanOutcome.Ok: Interlocked.Increment(ref counters.Ok); break;
+                        case ScanOutcome.Skipped: Interlocked.Increment(ref counters.Skipped); break;
+                        case ScanOutcome.UnknownFormat: Interlocked.Increment(ref counters.Unknown); break;
+                        case ScanOutcome.IntegrityFailed: Interlocked.Increment(ref counters.IntegrityFailed); break;
+                        case ScanOutcome.Error: Interlocked.Increment(ref counters.Errors); break;
+                    }
+                    // Freshness reset: forget tracked state for files we just acted on, unless we deliberately
+                    // chose to keep them around (only Skipped means "deferred to v1 collision policy" — even then
+                    // the file may be replaced later by a new download, so forget is correct).
+                    _completionDetector.Forget(path);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.Increment(ref counters.Errors);
+                    _logger.Error(ex, "Watch: unhandled error processing {Path}", path);
+                }
+            }).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Always flush partial counters to the summary, even on graceful/hard cancel.
+            reporter(counters);
+        }
     }
 
     /// <summary>
