@@ -93,7 +93,72 @@ Get inline help:
 ```bash
 fb --help
 fb scan --help
+fb watch --help
 ```
+
+---
+
+## `fb watch`
+
+Watch an input directory for new/changed `.uc` files and decode them as they stabilize. Runs until Ctrl-C.
+
+```
+fb watch <input-dir> --output <output-dir> [options]
+```
+
+### Example
+
+```bash
+fb watch ~/Library/Caches/com.netease.163music/Caches -o ~/Music/Decoded
+```
+
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-o, --output <dir>` | required | Output directory for decoded files. Created if missing. |
+| `--integrity <level>` | `auto` | One of `auto` / `l1` / `l3` / `off`. See [Integrity levels](#integrity-levels). |
+| `--concurrency <n>` | `4` | Max files processed in parallel (1-32). |
+| `--on-collision <policy>` | `skip` | `skip` or `overwrite` when the output file already exists. |
+| `--poll-interval <Ns\|Nm>` | `5s` | How often to poll the input directory. Range `1s`..`60m`. |
+| `--stability-checks <n>` | `2` | Consecutive equal-size polls required before treating a file as complete (1-10). |
+| `--min-file-size <bytes>` | `1024` | Skip files smaller than N bytes. |
+| `--skip-initial-scan` | `false` | Skip the initial pass over existing files; only process files that appear after startup. |
+| `--log-file <path>` | `<output>/.freebird/logs/watch-YYYY-MM-DD.log` | Path to the rolling watch log file. |
+| `--no-log-file` | `false` | Disable the rolling watch log file. Mutually exclusive with `--log-file`. |
+| `-v, --verbose` | `false` | Debug-level logging. |
+| `-q, --quiet` | `false` | Warning-level only. Mutually exclusive with `--verbose`. |
+
+### Re-decoding files
+
+There is no separate "retry" command. To re-process a file, delete the corresponding output:
+
+```bash
+# Re-decode a successfully processed file
+rm output/foo.flac
+
+# Retry a quarantined failure
+rm output/.freebird-failed/foo.flac.txt
+```
+
+The next poll cycle will see the missing output and decode the source again.
+
+### Log file
+
+By default `fb watch` writes a rolling log to:
+
+```
+<output>/.freebird/logs/watch-YYYY-MM-DD.log
+```
+
+- Rolls daily.
+- 14-day retention (older files are deleted automatically).
+- Override the path with `--log-file <path>`.
+- Disable file logging entirely with `--no-log-file` (console output is unaffected).
+
+### Exit codes
+
+Same mapping as `fb scan` — see [Exit codes](#exit-codes). Ctrl-C / SIGTERM exits with code `130`.
 
 ---
 
@@ -160,12 +225,11 @@ No files in the input directory are ever modified or deleted.
 
 ---
 
-## Limitations (v1)
+## Limitations
 
-- **One-shot scan only** — no watch / daemon mode. Re-run `fb scan` after each cache update.
 - **No NetEase metadata API integration** — output uses the original cache filename stem (e.g. `12345-abc.mp3`), not the song title.
 - **No ID3 tag writing** — decoded files have the same tags as the original cache (which NetEase strips before caching).
-- **`flac` binary must be on `PATH`** for L3 — no config-file override yet (planned for v1.1).
+- **`flac` binary must be on `PATH`** for L3 — no config-file override yet.
 - **No recursive directory scan** — input directory is scanned non-recursively.
 
 ---
@@ -173,7 +237,7 @@ No files in the input directory are ever modified or deleted.
 ## Development
 
 ```bash
-dotnet test                # 222 tests, all passing
+dotnet test                # 378 tests, all passing
 dotnet build               # 0 warnings, 0 errors
 dotnet run --project src/FreeBird.Cli -- scan ./test-in --output ./test-out
 ```
