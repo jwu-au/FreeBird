@@ -17,13 +17,17 @@ namespace FreeBird.Core.NetEase;
 /// transport/HTTP/JSON failures — every outcome maps to a
 /// <see cref="NetEaseApiResult"/> union case. User cancellation (via <c>ct</c>)
 /// is the only exception that propagates.
+///
+/// Test seam (v3 T20): the API base host/scheme can be overridden by setting the
+/// <c>FB_NETEASE_BASEURL</c> environment variable (e.g.
+/// <c>http://127.0.0.1:54321</c>) before constructing this client. The path
+/// (<c>/api/song/detail/?id=...&amp;ids=...</c>) is always appended. Read at
+/// construction time so each E2E test that swaps the env var gets a fresh URL.
+/// Production behavior (no env var) is unchanged: defaults to
+/// <c>https://music.163.com</c>.
 /// </summary>
 public sealed class NetEaseApiClient : INetEaseApiClient
 {
-    // Spec §5: both id and ids must be present; ids is URL-encoded [id].
-    private const string UrlFormat =
-        "https://music.163.com/api/song/detail/?id={0}&ids=%5B{0}%5D";
-
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -31,16 +35,31 @@ public sealed class NetEaseApiClient : INetEaseApiClient
 
     private readonly HttpClient _http;
     private readonly ILogger _log;
+    // Spec §5: both id and ids must be present; ids is URL-encoded [id].
+    // Built per-instance so the FB_NETEASE_BASEURL test seam is observed at ctor time
+    // (a static initializer would capture once per process and break sequential E2E
+    // tests that need different stub ports).
+    private readonly string _urlFormat;
 
     public NetEaseApiClient(HttpClient http, ILogger log)
     {
         _http = http;
         _log = log.ForContext<NetEaseApiClient>();
+        _urlFormat = BuildUrlFormat();
+    }
+
+    private static string BuildUrlFormat()
+    {
+        var baseOverride = Environment.GetEnvironmentVariable("FB_NETEASE_BASEURL");
+        var baseUrl = string.IsNullOrWhiteSpace(baseOverride)
+            ? "https://music.163.com"
+            : baseOverride.TrimEnd('/');
+        return baseUrl + "/api/song/detail/?id={0}&ids=%5B{0}%5D";
     }
 
     public async Task<NetEaseApiResult> GetSongDetailAsync(long musicId, TimeSpan timeout, CancellationToken ct)
     {
-        var url = string.Format(CultureInfo.InvariantCulture, UrlFormat, musicId);
+        var url = string.Format(CultureInfo.InvariantCulture, _urlFormat, musicId);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         linkedCts.CancelAfter(timeout);
         var sw = Stopwatch.StartNew();
