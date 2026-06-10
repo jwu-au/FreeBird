@@ -10,12 +10,16 @@ namespace FreeBird.Core.Tests.Naming;
 public sealed class MetadataAwareFileNamerTests
 {
     // ---- helpers ----------------------------------------------------------
+    //
+    // v3 T19a: MetadataAwareFileNamer no longer takes IMetadataOptions in its ctor.
+    // The per-call template is passed as a method parameter to GetTargetName; tests
+    // that want a non-default template thread it through the call site instead.
 
-    private static IMetadataOptions OptsWithTemplate(string template) =>
-        new ScanOptions("in", "out") { NamingTemplate = template };
+    private static MetadataAwareFileNamer Build() =>
+        new(new NamingTemplateRenderer());
 
-    private static MetadataAwareFileNamer Build(string template = "{artist} - {title}") =>
-        new(new NamingTemplateRenderer(), OptsWithTemplate(template));
+    // Default template used by callers when no per-run template is supplied.
+    private const string DefaultTemplate = "{artist} - {title}";
 
     // ---- tests ------------------------------------------------------------
 
@@ -25,6 +29,7 @@ public sealed class MetadataAwareFileNamerTests
         var namer = Build();
         var meta = new SongInfo(3367798042L, "终不负", new[] { "树离suliii_" });
 
+        // null template => default ({artist} - {title})
         var name = namer.GetTargetName("/cache/3367798042.uc", AudioFormat.Flac, meta);
 
         name.Should().Be("树离suliii_ - 终不负.flac");
@@ -33,8 +38,7 @@ public sealed class MetadataAwareFileNamerTests
     [Fact]
     public void WithNullMetadata_UsesMusicIdFallback()
     {
-        // Use a non-default template to prove the template is IGNORED on fallback.
-        var namer = Build("{artist} - {title}");
+        var namer = Build();
 
         var name = namer.GetTargetName("/cache/3367798042.uc", AudioFormat.Flac, metadata: null);
 
@@ -46,10 +50,10 @@ public sealed class MetadataAwareFileNamerTests
     {
         // Template intentionally contains a "/" which the sanitizer must convert to
         // full-width U+FF0F to keep the filename single-segment + safe.
-        var namer = Build("{album}/{title}");
+        var namer = Build();
         var meta = new SongInfo(123L, "title", new[] { "a" }, Album: "album-name");
 
-        var name = namer.GetTargetName("/cache/123.uc", AudioFormat.Flac, meta);
+        var name = namer.GetTargetName("/cache/123.uc", AudioFormat.Flac, meta, "{album}/{title}");
 
         // U+FF0F = '／'
         name.Should().Be("album-name／title.flac");
@@ -58,10 +62,10 @@ public sealed class MetadataAwareFileNamerTests
     [Fact]
     public void Sanitization_AppliedToFinalName()
     {
-        var namer = Build("{title}");
+        var namer = Build();
         var meta = new SongInfo(123L, "A/B", new[] { "x" });
 
-        var name = namer.GetTargetName("/cache/123.uc", AudioFormat.Mp3, meta);
+        var name = namer.GetTargetName("/cache/123.uc", AudioFormat.Mp3, meta, "{title}");
 
         // '/' → full-width '／', extension appended.
         name.Should().Be("A／B.mp3");
@@ -73,10 +77,10 @@ public sealed class MetadataAwareFileNamerTests
     [InlineData(AudioFormat.M4a, ".m4a")]
     public void Extension_FromAudioFormat_Enum(AudioFormat format, string expectedExt)
     {
-        var namer = Build("{title}");
+        var namer = Build();
         var meta = new SongInfo(1L, "t", new[] { "a" });
 
-        var name = namer.GetTargetName("/cache/1.uc", format, meta);
+        var name = namer.GetTargetName("/cache/1.uc", format, meta, "{title}");
 
         name.Should().EndWith(expectedExt);
     }
@@ -95,10 +99,10 @@ public sealed class MetadataAwareFileNamerTests
     [Fact]
     public void MultiArtist_FilenameContext_JoinedWithSpaceAmpSpace()
     {
-        var namer = Build("{artist}");
+        var namer = Build();
         var meta = new SongInfo(1L, "t", new[] { "A", "B" });
 
-        var name = namer.GetTargetName("/cache/1.uc", AudioFormat.Flac, meta);
+        var name = namer.GetTargetName("/cache/1.uc", AudioFormat.Flac, meta, "{artist}");
 
         name.Should().Be("A & B.flac");
     }
@@ -106,10 +110,10 @@ public sealed class MetadataAwareFileNamerTests
     [Fact]
     public void MusicId_ParsedFrom_BareStem()
     {
-        var namer = Build("{musicId}");
+        var namer = Build();
         var meta = new SongInfo(0L, "t", new[] { "a" });   // SongInfo.MusicId unused on render side
 
-        var name = namer.GetTargetName("/cache/3367798042.uc", AudioFormat.Flac, meta);
+        var name = namer.GetTargetName("/cache/3367798042.uc", AudioFormat.Flac, meta, "{musicId}");
 
         name.Should().Be("3367798042.flac");
     }
@@ -118,10 +122,10 @@ public sealed class MetadataAwareFileNamerTests
     public void MusicId_ParsedFrom_CompositeStem()
     {
         // Real-world cache filename shape: <musicId>-_-_<bitrate>-_-_<other>.uc
-        var namer = Build("{musicId}");
+        var namer = Build();
         var meta = new SongInfo(0L, "t", new[] { "a" });
 
-        var name = namer.GetTargetName("/cache/3367798042-_-_5999-_-_xxx.uc", AudioFormat.Mp3, meta);
+        var name = namer.GetTargetName("/cache/3367798042-_-_5999-_-_xxx.uc", AudioFormat.Mp3, meta, "{musicId}");
 
         name.Should().Be("3367798042.mp3");
     }
@@ -140,11 +144,7 @@ public sealed class MetadataAwareFileNamerTests
     [Fact]
     public void Constructor_ThrowsOnNullDependency()
     {
-        var renderer = new NamingTemplateRenderer();
-        var opts = OptsWithTemplate("{title}");
-
-        ((Action)(() => new MetadataAwareFileNamer(null!, opts))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => new MetadataAwareFileNamer(renderer, null!))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => new MetadataAwareFileNamer(null!))).Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
@@ -155,5 +155,49 @@ public sealed class MetadataAwareFileNamerTests
 
         ((Action)(() => namer.GetTargetName("", AudioFormat.Flac, meta))).Should().Throw<ArgumentException>();
         ((Action)(() => namer.GetTargetName("   ", AudioFormat.Flac, meta))).Should().Throw<ArgumentException>();
+    }
+
+    // -------------------------------------------------------------------------
+    // v3 T19a: per-run template threading via method parameter
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void GetTargetName_WithCustomTemplate_UsesProvidedTemplate()
+    {
+        // The custom template wins over the default; tokens are rendered verbatim
+        // and the sanitizer only touches segment-illegal characters (musicId stays).
+        var namer = Build();
+        var meta = new SongInfo(42L, "My Title", new[] { "A" });
+
+        var name = namer.GetTargetName("/cache/42.uc", AudioFormat.Flac, meta, "{title} [{musicId}]");
+
+        name.Should().Be("My Title [42].flac");
+    }
+
+    [Fact]
+    public void GetTargetName_TemplateNull_FallsBackToDefault()
+    {
+        // null namingTemplate => the implementation MUST use its own default,
+        // which is "{artist} - {title}" per the IFileNamer XML doc.
+        var namer = Build();
+        var meta = new SongInfo(42L, "T", new[] { "A" });
+
+        var name = namer.GetTargetName("/cache/42.uc", AudioFormat.Flac, meta, namingTemplate: null);
+
+        name.Should().Be(DefaultTemplate
+            .Replace("{artist}", "A")
+            .Replace("{title}", "T") + ".flac");
+    }
+
+    [Fact]
+    public void GetTargetName_TemplateIgnoredOnFallback()
+    {
+        // Spec §10: when metadata is null the output is always {musicId}.{ext}
+        // regardless of which template the caller passed.
+        var namer = Build();
+
+        var name = namer.GetTargetName("/cache/3367798042.uc", AudioFormat.Mp3, metadata: null, namingTemplate: "{album}|{title}");
+
+        name.Should().Be("3367798042.mp3");
     }
 }

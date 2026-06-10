@@ -106,7 +106,7 @@ public class FileProcessorTests : IDisposable
         var ucPath = await MakeUcFileAsync("42-song.uc");
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
-        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Mp3, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("42-song.mp3");
+        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Mp3, It.IsAny<FreeBird.Core.Metadata.SongInfo?>(), It.IsAny<string?>())).Returns("42-song.mp3");
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
 
@@ -130,7 +130,7 @@ public class FileProcessorTests : IDisposable
         var ucPath = await MakeUcFileAsync();
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
-        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Mp3, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("out.mp3");
+        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Mp3, It.IsAny<FreeBird.Core.Metadata.SongInfo?>(), It.IsAny<string?>())).Returns("out.mp3");
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
 
@@ -154,7 +154,7 @@ public class FileProcessorTests : IDisposable
         var ucPath = await MakeUcFileAsync();
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
-        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Mp3, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("out.mp3");
+        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Mp3, It.IsAny<FreeBird.Core.Metadata.SongInfo?>(), It.IsAny<string?>())).Returns("out.mp3");
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
 
@@ -197,7 +197,7 @@ public class FileProcessorTests : IDisposable
         var ucPath = await MakeUcFileAsync("99-bad.uc");
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
-        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Flac, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("99-bad.flac");
+        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Flac, It.IsAny<FreeBird.Core.Metadata.SongInfo?>(), It.IsAny<string?>())).Returns("99-bad.flac");
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Failed(IntegrityLevel.L3, "PCM-MD5 mismatch"));
 
@@ -316,7 +316,7 @@ public class FileProcessorTests : IDisposable
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
                .ReturnsAsync(AudioFormat.Mp3);
-        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Mp3, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("42-song.mp3");
+        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Mp3, It.IsAny<FreeBird.Core.Metadata.SongInfo?>(), It.IsAny<string?>())).Returns("42-song.mp3");
 
         // Capture the path that integrity sees
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
@@ -338,7 +338,7 @@ public class FileProcessorTests : IDisposable
         var ucPath = await MakeUcFileAsync("77-meta.uc");
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
-        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Flac, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("77-meta.flac");
+        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Flac, It.IsAny<FreeBird.Core.Metadata.SongInfo?>(), It.IsAny<string?>())).Returns("77-meta.flac");
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Failed(IntegrityLevel.L3, "PCM-MD5 mismatch"));
 
@@ -374,7 +374,7 @@ public class FileProcessorTests : IDisposable
         expectedSize.Should().Be(4);
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
-        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Flac, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("size-check.flac");
+        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Flac, It.IsAny<FreeBird.Core.Metadata.SongInfo?>(), It.IsAny<string?>())).Returns("size-check.flac");
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Failed(IntegrityLevel.L1, "bad"));
 
@@ -394,7 +394,7 @@ public class FileProcessorTests : IDisposable
         await File.WriteAllBytesAsync(path, new byte[1234567]);
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
-        naming.Setup(n => n.GetTargetName(path, AudioFormat.Mp3, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("big.mp3");
+        naming.Setup(n => n.GetTargetName(path, AudioFormat.Mp3, It.IsAny<FreeBird.Core.Metadata.SongInfo?>(), It.IsAny<string?>())).Returns("big.mp3");
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Failed(IntegrityLevel.L1, "bad"));
 
@@ -416,7 +416,7 @@ public class FileProcessorTests : IDisposable
         var expectedMtime = new DateTimeOffset(File.GetLastWriteTimeUtc(ucPath), TimeSpan.Zero);
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
-        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Mp3, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("mtime-check.mp3");
+        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Mp3, It.IsAny<FreeBird.Core.Metadata.SongInfo?>(), It.IsAny<string?>())).Returns("mtime-check.mp3");
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Failed(IntegrityLevel.L1, "bad"));
 
@@ -445,7 +445,7 @@ public class FileProcessorTests : IDisposable
         var expectedMtime = new DateTimeOffset(File.GetLastWriteTimeUtc(ucPath), TimeSpan.Zero);
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
-        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Flac, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("roundtrip.flac");
+        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Flac, It.IsAny<FreeBird.Core.Metadata.SongInfo?>(), It.IsAny<string?>())).Returns("roundtrip.flac");
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Failed(IntegrityLevel.L3, "PCM-MD5 mismatch"));
 
@@ -555,7 +555,7 @@ public class FileProcessorTests : IDisposable
         var ucPath = await MakeUcFileAsync("xx-fail.uc");
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
-        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Mp3, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("xx-fail.mp3");
+        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Mp3, It.IsAny<FreeBird.Core.Metadata.SongInfo?>(), It.IsAny<string?>())).Returns("xx-fail.mp3");
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Failed(IntegrityLevel.L1, "structural failure"));
 
@@ -581,7 +581,7 @@ public class FileProcessorTests : IDisposable
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
                .ReturnsAsync(AudioFormat.Flac);
-        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Flac, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("99-song.flac");
+        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Flac, It.IsAny<FreeBird.Core.Metadata.SongInfo?>(), It.IsAny<string?>())).Returns("99-song.flac");
 
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .Callback<string, AudioFormat, IntegrityLevel, CancellationToken>((p, _, _, _) => capturedPath = p)
@@ -608,7 +608,7 @@ public class FileProcessorTests : IDisposable
                  .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
         metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new MetadataResolution.Success(new SongInfo(42, "My Title", new[] { "My Artist" })));
-        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.Is<SongInfo?>(s => s != null && s.Title == "My Title")))
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.Is<SongInfo?>(s => s != null && s.Title == "My Title"), It.IsAny<string?>()))
               .Returns("My Artist - My Title.flac");
 
         var result = await sut.ProcessAsync(ucPath, DefaultOptions());
@@ -618,7 +618,7 @@ public class FileProcessorTests : IDisposable
         // Success → no sidecar
         File.Exists(Path.Combine(_outputDir, "My Artist - My Title.flac.txt")).Should().BeFalse();
         naming.Verify(
-            n => n.GetTargetName(ucPath, AudioFormat.Flac, It.Is<SongInfo?>(s => s != null && s.MusicId == 42)),
+            n => n.GetTargetName(ucPath, AudioFormat.Flac, It.Is<SongInfo?>(s => s != null && s.MusicId == 42), It.IsAny<string?>()),
             Times.Once);
     }
 
@@ -633,7 +633,7 @@ public class FileProcessorTests : IDisposable
                  .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
         metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new MetadataResolution.Fallback("metadata-fetch-failed"));
-        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null))
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null, It.IsAny<string?>()))
               .Returns("42.flac");
 
         var result = await sut.ProcessAsync(ucPath, DefaultOptions());
@@ -658,7 +658,7 @@ public class FileProcessorTests : IDisposable
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
-        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null))
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null, It.IsAny<string?>()))
               .Returns("42.flac");
 
         var result = await sut.ProcessAsync(ucPath, DefaultOptions());
@@ -680,7 +680,7 @@ public class FileProcessorTests : IDisposable
                  .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
         metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new MetadataResolution.Fallback("metadata-deserialize-failed"));
-        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null))
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null, It.IsAny<string?>()))
               .Returns("42.flac");
 
         var result = await sut.ProcessAsync(ucPath, DefaultOptions());
@@ -692,20 +692,15 @@ public class FileProcessorTests : IDisposable
     }
 
     [Fact]
-    public async Task ProcessAsync_WithMetadataSuccess_UsesDefaultTemplate_NotPerRunOption()
+    public async Task Process_PassesPerRunTemplate_ToNamer()
     {
-        // GAP DOCUMENTATION (v3 T14 → T18/T19): ScanOptions.NamingTemplate is currently
-        // IGNORED by the namer because MetadataAwareFileNamer reads NamingTemplate from
-        // the SingleInstance DefaultMetadataOptions registered in CoreModule, not from
-        // the per-run options the FileProcessor receives. CLI plumbing tasks (T18 scan,
-        // T19 watch) will bridge per-run options into the namer. When that lands, this
-        // test will FAIL and must be UPDATED to assert the new behavior. Until then it
-        // serves as a tripwire that locks in the current intentional gap.
+        // v3 T19a: closes the bridge gap. ScanOptions.NamingTemplate now flows
+        // through FileProcessor.ProcessAsync into IFileNamer.GetTargetName as the
+        // 4th positional argument (the optional `namingTemplate` parameter).
         //
-        // The naming mock here ignores any template the FileProcessor might pass — it
-        // returns a fixed string derived only from the resolved SongInfo. The assertion
-        // proves that even with an exotic options.NamingTemplate, the output filename
-        // is governed by the namer, not the per-run options.
+        // This test pins down the plumbing contract: whatever per-run template the
+        // caller sets MUST be the exact string the namer receives — no default
+        // substitution by the orchestrator.
         var (sut, _, sniffer, naming, integrity, _, metadata, _) = MakeMockedSut();
         var ucPath = await MakeUcFileAsync("1.uc");
 
@@ -714,16 +709,21 @@ public class FileProcessorTests : IDisposable
                  .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
         metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new MetadataResolution.Success(new SongInfo(1, "T", new[] { "A" }, Album: "AL")));
-        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), It.IsAny<AudioFormat>(), It.IsAny<SongInfo?>()))
-              .Returns<string, AudioFormat, SongInfo?>((_, _, s) => $"{string.Join(" & ", s!.Artists)} - {s.Title}.flac");
+        // The mock returns a fixed name regardless of inputs — we only care that
+        // the 4th argument (per-run template) matches the per-run options string.
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), It.IsAny<AudioFormat>(), It.IsAny<SongInfo?>(), It.IsAny<string?>()))
+              .Returns("AL|T.flac");
 
-        var opts = new ScanOptions(_inputDir, _outputDir) { NamingTemplate = "{album}|{title}" };
+        const string PerRunTemplate = "{album}|{title}";
+        var opts = new ScanOptions(_inputDir, _outputDir) { NamingTemplate = PerRunTemplate };
 
         var result = await sut.ProcessAsync(ucPath, opts);
 
         result.Outcome.Should().Be(ScanOutcome.Ok);
-        File.Exists(Path.Combine(_outputDir, "A - T.flac")).Should().BeTrue();
-        File.Exists(Path.Combine(_outputDir, "AL|T.flac")).Should().BeFalse();
+        File.Exists(Path.Combine(_outputDir, "AL|T.flac")).Should().BeTrue();
+        naming.Verify(
+            n => n.GetTargetName(ucPath, AudioFormat.Flac, It.Is<SongInfo?>(s => s != null && s.MusicId == 1), PerRunTemplate),
+            Times.Once);
     }
 
     // -------------------------------------------------------------------------
@@ -743,7 +743,7 @@ public class FileProcessorTests : IDisposable
                  .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
         metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new MetadataResolution.Success(new SongInfo(42, "T", new[] { "A" })));
-        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<SongInfo?>()))
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
               .Returns("A - T.flac");
 
         var opts = DefaultOptions();   // WriteTags = false by default
@@ -769,7 +769,7 @@ public class FileProcessorTests : IDisposable
         var song = new SongInfo(42, "My Title", new[] { "My Artist" });
         metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new MetadataResolution.Success(song));
-        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<SongInfo?>()))
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
               .Returns("My Artist - My Title.flac");
 
         var opts = new ScanOptions(_inputDir, _outputDir) { WriteTags = true };
@@ -797,7 +797,7 @@ public class FileProcessorTests : IDisposable
                  .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
         metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new MetadataResolution.Fallback("metadata-fetch-failed"));
-        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null))
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null, It.IsAny<string?>()))
               .Returns("42.flac");
 
         var opts = new ScanOptions(_inputDir, _outputDir) { WriteTags = true };
@@ -826,7 +826,7 @@ public class FileProcessorTests : IDisposable
                  .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
         metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new MetadataResolution.Success(new SongInfo(42, "T", new[] { "A" })));
-        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<SongInfo?>()))
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
               .Returns("A - T.flac");
         tagWriter.Setup(t => t.WriteAsync(It.IsAny<string>(), It.IsAny<AudioFormat>(), It.IsAny<SongInfo>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(new TagWriteResult.Failed("tag-tool-missing"));
@@ -855,7 +855,7 @@ public class FileProcessorTests : IDisposable
                  .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
         metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new MetadataResolution.Success(new SongInfo(42, "T", new[] { "A" })));
-        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<SongInfo?>()))
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
               .Returns("A - T.flac");
         tagWriter.Setup(t => t.WriteAsync(It.IsAny<string>(), It.IsAny<AudioFormat>(), It.IsAny<SongInfo>(), It.IsAny<CancellationToken>()))
                  .ThrowsAsync(new InvalidOperationException("tagger lib panicked"));

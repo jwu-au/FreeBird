@@ -20,19 +20,20 @@ namespace FreeBird.Core.Naming;
 /// </summary>
 public sealed class MetadataAwareFileNamer : IFileNamer
 {
-    private readonly INamingTemplateRenderer _renderer;
-    private readonly IMetadataOptions _options;
+    // The fallback template used when the caller does not pass a per-run namingTemplate.
+    // Kept in sync with DefaultMetadataOptions.NamingTemplate and the IFileNamer XML doc.
+    private const string DefaultNamingTemplate = "{artist} - {title}";
 
-    public MetadataAwareFileNamer(INamingTemplateRenderer renderer, IMetadataOptions options)
+    private readonly INamingTemplateRenderer _renderer;
+
+    public MetadataAwareFileNamer(INamingTemplateRenderer renderer)
     {
         ArgumentNullException.ThrowIfNull(renderer);
-        ArgumentNullException.ThrowIfNull(options);
         _renderer = renderer;
-        _options = options;
     }
 
     /// <inheritdoc />
-    public string GetTargetName(string sourcePath, AudioFormat format, SongInfo? metadata)
+    public string GetTargetName(string sourcePath, AudioFormat format, SongInfo? metadata, string? namingTemplate = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
 
@@ -55,8 +56,11 @@ public sealed class MetadataAwareFileNamer : IFileNamer
             return musicId.ToString(CultureInfo.InvariantCulture) + ext;
         }
 
-        // Success path: render template, sanitize, append extension.
-        var rendered = _renderer.Render(_options.NamingTemplate, metadata, musicId);
+        // Success path: render template (per-run or default), sanitize, append extension.
+        // v3 T19a: per-run template now flows in through the method parameter rather
+        // than from a DI-injected IMetadataOptions; null falls back to the v1/v2 default.
+        var template = namingTemplate ?? DefaultNamingTemplate;
+        var rendered = _renderer.Render(template, metadata, musicId);
         var sanitized = FilenameSanitizer.Sanitize(rendered);
         return sanitized + ext;
     }

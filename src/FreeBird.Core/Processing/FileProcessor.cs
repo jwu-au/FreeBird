@@ -131,7 +131,9 @@ public sealed class FileProcessor : IFileProcessor
             // Step 6: integrity failed -> quarantine
             if (!integrity.Ok)
             {
-                var outputName = _naming.GetTargetName(sourcePath, format, metadata: null);
+                // Pass the per-run template for consistency; the namer's fallback rule
+                // (metadata is null => {musicId}.{ext}) ignores it on this path anyway.
+                var outputName = _naming.GetTargetName(sourcePath, format, metadata: null, options.NamingTemplate);
                 var quarantinedPath = QuarantineFile(
                     stagingPath, failedDir, outputName,
                     sourcePath, format, integrity.LevelApplied, integrity.Reason ?? "Integrity failed");
@@ -151,10 +153,8 @@ public sealed class FileProcessor : IFileProcessor
             SongInfo? song = resolution is MetadataResolution.Success s ? s.Song : null;
 
             // Step 7: compute final path.
-            // TODO(v3 T18/T19): per-run NamingTemplate from options is currently overridden by
-            // DefaultMetadataOptions; CLI flag plumbing tasks will bridge per-run options into
-            // MetadataAwareFileNamer (via child lifetime scope, method param, or per-call namer).
-            var finalName = _naming.GetTargetName(sourcePath, format, song);
+            // v3 T19a: per-run NamingTemplate is now threaded into the namer via the method param.
+            var finalName = _naming.GetTargetName(sourcePath, format, song, options.NamingTemplate);
             var finalPath = Path.Combine(options.OutputDirectory, finalName);
 
             // Step 8: collision check

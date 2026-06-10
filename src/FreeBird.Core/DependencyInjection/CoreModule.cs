@@ -69,8 +69,12 @@ public sealed class CoreModule : Module
         // DefaultMetadataOptions (T13): spec-default IMetadataOptions so the container
         // graph can resolve at startup. Per-run options (ScanOptions/WatchOptions) flow
         // through orchestrator method parameters (FileProcessor.ProcessAsync in T14),
-        // NOT the container. This default exists only so MetadataAwareFileNamer's
-        // ctor dependency on IMetadataOptions is satisfied at compose time.
+        // NOT the container.
+        //
+        // Note: NamingTemplate no longer flows through this default — MetadataAwareFileNamer
+        // reads it from a method param now (v3 T19a). This singleton is retained because
+        // IMetadataResolver may still want startup defaults for Offline/ApiTimeoutSeconds/
+        // ApiRateLimit until the matching CLI flags land in T19b.
         builder.RegisterType<DefaultMetadataOptions>()
                .As<IMetadataOptions>()
                .SingleInstance();

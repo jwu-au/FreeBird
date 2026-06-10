@@ -17,7 +17,10 @@ namespace FreeBird.Core.Decoding;
 /// </summary>
 public sealed class StemBasedFileNamer : IFileNamer
 {
-    public string GetTargetName(string sourcePath, AudioFormat format, SongInfo? metadata)
+    // namingTemplate is intentionally ignored: stem-based naming derives the
+    // filename solely from the source file's stem (v1/v2 behavior) and has
+    // no template to render. Accepted only to satisfy the IFileNamer contract.
+    public string GetTargetName(string sourcePath, AudioFormat format, SongInfo? metadata, string? namingTemplate = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
 
