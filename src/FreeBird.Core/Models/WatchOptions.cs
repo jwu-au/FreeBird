@@ -1,3 +1,5 @@
+using FreeBird.Core.Abstractions;
+
 namespace FreeBird.Core.Models;
 
 /// <summary>
@@ -5,7 +7,7 @@ namespace FreeBird.Core.Models;
 /// Holds the watch-loop knobs only; CLI-surface concerns (log file path, verbose/quiet)
 /// live on the CLI side.
 /// </summary>
-public sealed record WatchOptions
+public sealed record WatchOptions : IMetadataOptions
 {
     public WatchOptions(
         string InputDir,

@@ -56,6 +56,24 @@ public class InterfaceContractTests
     }
 
     [Fact]
+    public void INetEaseApiClient_Extends_IDependency()
+    {
+        typeof(IDependency).IsAssignableFrom(typeof(INetEaseApiClient)).Should().BeTrue();
+    }
+
+    [Fact]
+    public void IMetadataResolver_Extends_IDependency()
+    {
+        typeof(IDependency).IsAssignableFrom(typeof(IMetadataResolver)).Should().BeTrue();
+    }
+
+    [Fact]
+    public void ITagWriter_Extends_IDependency()
+    {
+        typeof(IDependency).IsAssignableFrom(typeof(ITagWriter)).Should().BeTrue();
+    }
+
+    [Fact]
     public void ProcessResult_RecordEquality()
     {
         var a = new ProcessResult(0, "out", "err");

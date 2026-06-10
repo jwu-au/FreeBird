@@ -1,3 +1,5 @@
+using FreeBird.Core.Abstractions;
+
 namespace FreeBird.Core.Models;
 
 /// <summary>
@@ -8,7 +10,7 @@ public sealed record ScanOptions(
     string OutputDirectory,
     IntegrityLevel Integrity = IntegrityLevel.Auto,
     int Concurrency = 2,
-    CollisionPolicy OnCollision = CollisionPolicy.Skip)
+    CollisionPolicy OnCollision = CollisionPolicy.Skip) : IMetadataOptions
 {
     /// <summary>
     /// Filename template using <c>{artist}</c>, <c>{title}</c>, <c>{album}</c>, and
