@@ -21,8 +21,9 @@ namespace FreeBird.Core.Naming;
 public sealed class MetadataAwareFileNamer : IFileNamer
 {
     // The fallback template used when the caller does not pass a per-run namingTemplate.
-    // Kept in sync with DefaultMetadataOptions.NamingTemplate and the IFileNamer XML doc.
-    private const string DefaultNamingTemplate = "{artist} - {title}";
+    // Aliased to MetadataDefaults.NamingTemplate (the single source of truth) so this
+    // namer and the CLI/options layer cannot drift apart.
+    private const string DefaultNamingTemplate = MetadataDefaults.NamingTemplate;
 
     private readonly INamingTemplateRenderer _renderer;
 

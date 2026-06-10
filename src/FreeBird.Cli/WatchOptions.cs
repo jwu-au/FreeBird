@@ -24,10 +24,10 @@ public sealed class WatchOptions
     public bool Quiet { get; init; }
 
     // T19b — v3 metadata flags, mirrored from Core.Models.WatchOptions / IMetadataOptions.
-    public string NamingTemplate { get; init; } = "{artist} - {title}";
+    public string NamingTemplate { get; init; } = MetadataDefaults.NamingTemplate;
     public bool Offline { get; init; }
-    public int ApiTimeoutSeconds { get; init; } = 10;
-    public int ApiRateLimit { get; init; }
+    public int ApiTimeoutSeconds { get; init; } = MetadataDefaults.ApiTimeoutSeconds;
+    public int ApiRateLimit { get; init; } = MetadataDefaults.ApiRateLimit;
     public bool WriteTags { get; init; }
 
     /// <summary>

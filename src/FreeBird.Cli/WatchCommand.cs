@@ -102,7 +102,7 @@ public static class WatchCommand
         var namingTemplateOpt = new Option<string>("--naming-template")
         {
             Description = "Filename template using {artist} {title} {album} {musicId}.",
-            DefaultValueFactory = _ => "{artist} - {title}",
+            DefaultValueFactory = _ => MetadataDefaults.NamingTemplate,
         };
 
         var offlineOpt = new Option<bool>("--offline")
@@ -113,13 +113,13 @@ public static class WatchCommand
         var apiTimeoutOpt = new Option<int>("--api-timeout")
         {
             Description = "NetEase API request timeout in seconds (1–300).",
-            DefaultValueFactory = _ => 10,
+            DefaultValueFactory = _ => MetadataDefaults.ApiTimeoutSeconds,
         };
 
         var apiRateLimitOpt = new Option<int>("--api-rate-limit")
         {
             Description = "Max NetEase API calls per second (0–100, 0 = unlimited).",
-            DefaultValueFactory = _ => 0,
+            DefaultValueFactory = _ => MetadataDefaults.ApiRateLimit,
         };
 
         var writeTagsOpt = new Option<bool>("--write-tags")
@@ -166,7 +166,7 @@ public static class WatchCommand
             var noLogFile = parseResult.GetValue(noLogFileOpt);
             var verbose = parseResult.GetValue(verboseOpt);
             var quiet = parseResult.GetValue(quietOpt);
-            var namingTemplate = parseResult.GetValue(namingTemplateOpt) ?? "{artist} - {title}";
+            var namingTemplate = parseResult.GetValue(namingTemplateOpt) ?? MetadataDefaults.NamingTemplate;
             var offline = parseResult.GetValue(offlineOpt);
             var apiTimeout = parseResult.GetValue(apiTimeoutOpt);
             var apiRateLimit = parseResult.GetValue(apiRateLimitOpt);

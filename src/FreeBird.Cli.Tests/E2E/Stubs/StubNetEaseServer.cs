@@ -34,13 +34,23 @@ public sealed class StubNetEaseServer : IDisposable
     /// <summary>Base URL (scheme + host + port, no trailing slash) the stub listens on.</summary>
     public Uri BaseUrl { get; }
 
-    /// <summary>JSON body returned for every request. Mutate before driving the CLI.</summary>
+    /// <summary>
+    /// JSON body returned for every request. Set BEFORE driving the CLI; not safe to
+    /// mutate concurrently with active requests (the listener loop reads this without locking).
+    /// </summary>
     public string ResponseJson { get; set; } = """{"songs":[],"code":200}""";
 
-    /// <summary>HTTP status code returned for every request.</summary>
+    /// <summary>
+    /// HTTP status code returned for every request. Set BEFORE driving the CLI; not safe
+    /// to mutate concurrently with active requests.
+    /// </summary>
     public int StatusCode { get; set; } = 200;
 
-    /// <summary>Per-request artificial delay (applied before the response is written).</summary>
+    /// <summary>
+    /// Per-request artificial delay (applied before the response is written). Set BEFORE
+    /// driving the CLI; not safe to mutate concurrently with active requests (TimeSpan
+    /// reads are not guaranteed atomic).
+    /// </summary>
     public TimeSpan ResponseDelay { get; set; } = TimeSpan.Zero;
 
     /// <summary>Number of requests the listener has fully accepted (incremented on each context).</summary>

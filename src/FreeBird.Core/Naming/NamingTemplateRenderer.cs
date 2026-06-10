@@ -3,6 +3,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using FreeBird.Core.Abstractions;
 using FreeBird.Core.Metadata;
+using FreeBird.Core.Models;
 
 namespace FreeBird.Core.Naming;
 
@@ -16,8 +17,9 @@ namespace FreeBird.Core.Naming;
 /// </summary>
 public sealed class NamingTemplateRenderer : INamingTemplateRenderer
 {
-    /// <summary>Default template used when the user does not override.</summary>
-    public const string DefaultTemplate = "{artist} - {title}";
+    /// <summary>Default template used when the user does not override. Aliased to
+    /// <see cref="MetadataDefaults.NamingTemplate"/> (single source of truth).</summary>
+    public const string DefaultTemplate = MetadataDefaults.NamingTemplate;
 
     /// <summary>Separator joining multiple artists in the FILENAME context.
     /// (The tag-writing separator is different; see <c>ITagWriter</c>.)</summary>

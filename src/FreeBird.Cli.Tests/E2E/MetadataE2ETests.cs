@@ -235,7 +235,7 @@ public class MetadataE2ETests
             var expected = Path.Combine(output, "TestArtist - TestTitle.flac");
             File.Exists(expected).Should().BeTrue();
 
-            var (outText, _) = RunProcess("metaflac", $"--list \"{expected}\"");
+            var (outText, _) = RunProcess("metaflac", "--list", expected);
             outText.Should().Contain("ARTIST=TestArtist");
             outText.Should().Contain("TITLE=TestTitle");
             outText.Should().Contain("ALBUM=TestAlbum");
@@ -260,15 +260,24 @@ public class MetadataE2ETests
         }
     }
 
-    private static (string stdout, int exitCode) RunProcess(string fileName, string args)
+    // Uses ProcessStartInfo.ArgumentList so each arg is passed verbatim (no shell-style
+    // quoting). On macOS/Linux UseShellExecute=false means there's no shell to escape
+    // against, but paths containing embedded quotes or spaces would still break the
+    // Arguments-as-string path; ArgumentList sidesteps that entirely.
+    private static (string stdout, int exitCode) RunProcess(string fileName, params string[] args)
     {
-        var psi = new ProcessStartInfo(fileName, args)
+        var psi = new ProcessStartInfo
         {
+            FileName = fileName,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        foreach (var arg in args)
+        {
+            psi.ArgumentList.Add(arg);
+        }
         using var p = Process.Start(psi) ?? throw new InvalidOperationException($"Failed to start {fileName}");
         var stdout = p.StandardOutput.ReadToEnd();
         _ = p.StandardError.ReadToEnd();

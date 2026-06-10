@@ -16,7 +16,7 @@ public sealed record ScanOptions(
     /// Filename template using <c>{artist}</c>, <c>{title}</c>, <c>{album}</c>, and
     /// <c>{musicId}</c> placeholders. Default: <c>"{artist} - {title}"</c>.
     /// </summary>
-    public string NamingTemplate { get; init; } = "{artist} - {title}";
+    public string NamingTemplate { get; init; } = MetadataDefaults.NamingTemplate;
 
     /// <summary>
     /// Skip NetEase API entirely; always use musicId fallback naming. Maps to the
@@ -27,13 +27,13 @@ public sealed record ScanOptions(
     /// <summary>
     /// API request timeout in seconds. Maps to <c>--api-timeout</c>. Default: 10.
     /// </summary>
-    public int ApiTimeoutSeconds { get; init; } = 10;
+    public int ApiTimeoutSeconds { get; init; } = MetadataDefaults.ApiTimeoutSeconds;
 
     /// <summary>
     /// Cap on API calls per second. <c>0</c> = unlimited. Maps to
     /// <c>--api-rate-limit</c>. Default: 0.
     /// </summary>
-    public int ApiRateLimit { get; init; } = 0;
+    public int ApiRateLimit { get; init; } = MetadataDefaults.ApiRateLimit;
 
     /// <summary>
     /// Write metadata tags into the decoded file (ID3/Vorbis/MP4). Maps to

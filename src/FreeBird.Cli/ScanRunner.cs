@@ -49,10 +49,10 @@ public static class ScanRunner
         CollisionPolicy collision,
         bool verbose,
         bool quiet = false,
-        string namingTemplate = "{artist} - {title}",
+        string namingTemplate = MetadataDefaults.NamingTemplate,
         bool offline = false,
-        int apiTimeoutSeconds = 10,
-        int apiRateLimit = 0,
+        int apiTimeoutSeconds = MetadataDefaults.ApiTimeoutSeconds,
+        int apiRateLimit = MetadataDefaults.ApiRateLimit,
         bool writeTags = false,
         CancellationToken externalToken = default)
     {
