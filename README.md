@@ -6,6 +6,85 @@ One-sweep CLI to decrypt NetEase Cloud Music `.uc` / `.uc!` cache files (XOR `0x
 
 ---
 
+## What's new in v3
+
+v3 adds **NetEase API–driven naming** and **optional tag-writing** to the decoder pipeline.
+
+### Filename rendering from real metadata
+
+When run online (the default), `fb` now queries the NetEase Cloud Music song-detail API
+for each decoded file and renames the output using a template. Out of the box:
+
+```
+3367798042.uc   →   <artist> - <title>.flac
+```
+
+The template is configurable via `--naming-template`. Recognised placeholders:
+`{artist}`, `{title}`, `{album}`, `{musicId}`. Templates may contain path separators
+(e.g. `"{album}/{title}"`) and will be sanitized for cross-platform filesystem safety.
+
+When the API call fails (offline, 5xx, timeout, deserialization error, or `--offline`),
+`fb` falls back to the musicId-based name:
+
+```
+3367798042.uc   →   3367798042.flac
+```
+
+and drops a `<finalname>.txt` sidecar next to it with `reason: <token>` so you can
+spot which files lost metadata. Tokens: `metadata-empty`, `metadata-fetch-failed`,
+`metadata-deserialize-failed`.
+
+### New CLI flags
+
+All five flags are available on both `fb scan` and `fb watch`:
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `--naming-template` | string | `"{artist} - {title}"` | Filename template using `{artist}` `{title}` `{album}` `{musicId}`. |
+| `--offline` | switch | `false` | Skip NetEase API; use musicId fallback naming. |
+| `--api-timeout` | int (seconds) | `10` | NetEase API request timeout (range 1–300). |
+| `--api-rate-limit` | int (req/sec) | `0` | Max NetEase API calls per second (0–100, 0 = unlimited). |
+| `--write-tags` | switch | `false` | Write metadata tags into decoded audio files. |
+
+For exact descriptions and defaults, see `fb scan --help` / `fb watch --help`.
+
+### Tag-writing (optional)
+
+`--write-tags` embeds the resolved metadata into the decoded audio:
+
+- **FLAC** — written via `metaflac` (install with `brew install flac` on macOS, `apt install flac` on Debian/Ubuntu).
+- **MP3** — ID3v2.3 tags written natively (no external tool required).
+- **M4A** — iTunes-style atoms written natively.
+
+Tags written: ARTIST, TITLE, ALBUM. If metadata resolution falls back to musicId,
+no tags are written for that file (the sidecar still records the reason).
+
+### Migration from v2 (3 steps)
+
+v3's online-by-default behaviour is a **BREAKING change** to filenames. Recommended
+migration path:
+
+1. **First v3 run — stay offline.** Use `fb scan ... --offline` to confirm v3 still
+   produces the v2-equivalent filenames (musicId-based) on your existing cache.
+2. **Drop `--offline`.** Re-run without the flag; new files are renamed from
+   metadata. Existing decoded files are skipped per `--collision` policy.
+3. **Opt into tags.** Add `--write-tags` (requires `metaflac` for FLAC). Re-decodes
+   are NOT triggered automatically; you may want to delete the prior outputs and
+   re-run if you want tags on previously-decoded files.
+
+### v3 edge cases worth knowing
+
+- **OA2 — re-decode after offline-only runs.** If you previously ran with
+  `--offline` and then run again WITHOUT `--offline`, the conservative collision
+  policy treats the existing musicId-named file as already-decoded; the new
+  metadata-named file will NOT be produced unless you use `--collision overwrite`
+  or delete the prior output. This is intentional — see CHANGELOG for rationale.
+- **OA1 — collisions.** When two different musicIds resolve to the same
+  `"<artist> - <title>"`, the second is suffixed with the musicId for
+  disambiguation (e.g. `"Foo - Bar [3367798042].flac"`).
+
+---
+
 ## Features
 
 - **Scans a directory** for `.uc` (Windows) and `.uc!` (macOS) NetEase cache files.
@@ -16,6 +95,7 @@ One-sweep CLI to decrypt NetEase Cloud Music `.uc` / `.uc!` cache files (XOR `0x
 - **Quarantines failures** to `.freebird-failed/` with a `.txt` sidecar capturing the reason.
 - **Skip-or-overwrite collision policy** for repeat runs.
 - **Concurrent** processing with configurable worker count.
+- **Metadata-aware naming** — renames output files from NetEase Cloud Music song-detail API; falls back to musicId on failure. Optional `--write-tags` embeds ARTIST/TITLE/ALBUM tags.
 
 ---
 
