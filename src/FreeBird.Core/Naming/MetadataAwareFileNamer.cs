@@ -1,0 +1,100 @@
+using System;
+using System.Globalization;
+using FreeBird.Core.Abstractions;
+using FreeBird.Core.Decoding;
+using FreeBird.Core.Metadata;
+using FreeBird.Core.Models;
+
+namespace FreeBird.Core.Naming;
+
+/// <summary>
+/// v3 file namer: composes <see cref="INamingTemplateRenderer"/> + <see cref="FilenameSanitizer"/>
+/// + extension to produce the final output filename string.
+///
+/// Pure: no I/O, no network. Receives the already-resolved <see cref="SongInfo"/>
+/// (or null for fallback) from the upstream pipeline (FileProcessor consumes
+/// IMetadataResolver and passes the SongInfo, or null on Fallback).
+///
+/// Fallback rule (per spec §10): when <paramref name="metadata"/> is null, the
+/// template is IGNORED and the filename is always <c>{musicId}.{ext}</c>.
+/// </summary>
+public sealed class MetadataAwareFileNamer : IFileNamer
+{
+    private readonly INamingTemplateRenderer _renderer;
+    private readonly IMetadataOptions _options;
+
+    public MetadataAwareFileNamer(INamingTemplateRenderer renderer, IMetadataOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(renderer);
+        ArgumentNullException.ThrowIfNull(options);
+        _renderer = renderer;
+        _options = options;
+    }
+
+    /// <inheritdoc />
+    public string GetTargetName(string sourcePath, AudioFormat format, SongInfo? metadata)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
+
+        if (format == AudioFormat.Unknown)
+        {
+            throw new ArgumentException("Cannot generate filename for unknown format", nameof(format));
+        }
+
+        var ext = GetExtension(format);
+
+        // Extract musicId from the .uc/.uc! stem. The stem is either:
+        //   - A bare numeric id (most common: "3367798042.uc")
+        //   - A composite cache name like "3367798042-_-_5999-_-_xxx.uc" — take leading digits.
+        var musicId = ExtractMusicId(sourcePath);
+
+        // Fallback path: spec §10 mandates {musicId}.{ext} regardless of template.
+        if (metadata is null)
+        {
+            // musicId may be 0 if extraction failed; that's still a deterministic name.
+            return musicId.ToString(CultureInfo.InvariantCulture) + ext;
+        }
+
+        // Success path: render template, sanitize, append extension.
+        var rendered = _renderer.Render(_options.NamingTemplate, metadata, musicId);
+        var sanitized = FilenameSanitizer.Sanitize(rendered);
+        return sanitized + ext;
+    }
+
+    /// <summary>
+    /// Extract the leading numeric musicId from the .uc/.uc! stem. Returns 0 when
+    /// the stem has no leading digits (caller treats this as a degenerate but
+    /// deterministic fallback name).
+    /// </summary>
+    private static long ExtractMusicId(string sourcePath)
+    {
+        var stem = StemBasedFileNamer.GetStem(sourcePath);
+
+        // Try whole-stem first (the canonical cache name form).
+        if (long.TryParse(stem, NumberStyles.None, CultureInfo.InvariantCulture, out var id))
+        {
+            return id;
+        }
+
+        // Composite stem: take leading digit run, e.g. "3367798042-_-_5999-_-_xxx".
+        int i = 0;
+        while (i < stem.Length && stem[i] >= '0' && stem[i] <= '9')
+        {
+            i++;
+        }
+        if (i > 0 && long.TryParse(stem.AsSpan(0, i), NumberStyles.None, CultureInfo.InvariantCulture, out var leading))
+        {
+            return leading;
+        }
+
+        return 0L;
+    }
+
+    private static string GetExtension(AudioFormat format) => format switch
+    {
+        AudioFormat.Mp3 => ".mp3",
+        AudioFormat.Flac => ".flac",
+        AudioFormat.M4a => ".m4a",
+        _ => throw new ArgumentOutOfRangeException(nameof(format), format, "Unsupported format"),
+    };
+}
