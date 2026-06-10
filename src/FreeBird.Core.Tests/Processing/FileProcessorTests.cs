@@ -8,6 +8,7 @@ using FluentAssertions;
 using FreeBird.Core.Abstractions;
 using FreeBird.Core.Decoding;
 using FreeBird.Core.Infrastructure;
+using FreeBird.Core.Metadata;
 using FreeBird.Core.Models;
 using FreeBird.Core.Processing;
 using FreeBird.Core.Sidecar;
@@ -43,13 +44,15 @@ public class FileProcessorTests : IDisposable
              Mock<IFormatSniffer> sniffer,
              Mock<IFileNamer> naming,
              Mock<ICompositeIntegrityChecker> integrity,
-             Mock<IAtomicFileWriter> writer) MakeMockedSut()
+             Mock<IAtomicFileWriter> writer,
+             Mock<IMetadataResolver> metadata) MakeMockedSut()
     {
         var decoder = new Mock<IXorDecoder>();
         var sniffer = new Mock<IFormatSniffer>();
         var naming = new Mock<IFileNamer>();
         var integrity = new Mock<ICompositeIntegrityChecker>();
         var writer = new Mock<IAtomicFileWriter>();
+        var metadata = new Mock<IMetadataResolver>();
 
         // default: writer simulates writing a small staging file by invoking the callback against a real FileStream
         writer.Setup(w => w.WriteAsync(It.IsAny<string>(), It.IsAny<Func<Stream, CancellationToken, Task>>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
@@ -67,9 +70,14 @@ public class FileProcessorTests : IDisposable
                    await output.WriteAsync(new byte[] { 1, 2, 3, 4 }, ct);
                });
 
+        // default metadata: Fallback("offline-mode") — same observable behavior as v1/v2
+        // (no sidecar, namer receives null SongInfo so it falls back to musicId/stem naming).
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Fallback("offline-mode"));
+
         var logger = new Mock<ILogger>().Object;
-        var sut = new FileProcessor(decoder.Object, sniffer.Object, naming.Object, integrity.Object, writer.Object, logger);
-        return (sut, decoder, sniffer, naming, integrity, writer);
+        var sut = new FileProcessor(decoder.Object, sniffer.Object, naming.Object, integrity.Object, writer.Object, metadata.Object, logger);
+        return (sut, decoder, sniffer, naming, integrity, writer, metadata);
     }
 
     private async Task<string> MakeUcFileAsync(string name = "12345-test.uc")
@@ -87,7 +95,7 @@ public class FileProcessorTests : IDisposable
     [Fact]
     public async Task ProcessAsync_HappyPath_ReturnsOk_WritesFinalFile()
     {
-        var (sut, _, sniffer, naming, integrity, _) = MakeMockedSut();
+        var (sut, _, sniffer, naming, integrity, _, _) = MakeMockedSut();
         var ucPath = await MakeUcFileAsync("42-song.uc");
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
@@ -111,7 +119,7 @@ public class FileProcessorTests : IDisposable
     [Fact]
     public async Task ProcessAsync_OutputExists_SkipPolicy_ReturnsSkipped_NoOverwrite()
     {
-        var (sut, _, sniffer, naming, integrity, _) = MakeMockedSut();
+        var (sut, _, sniffer, naming, integrity, _, _) = MakeMockedSut();
         var ucPath = await MakeUcFileAsync();
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
@@ -135,7 +143,7 @@ public class FileProcessorTests : IDisposable
     [Fact]
     public async Task ProcessAsync_OutputExists_OverwritePolicy_OverwritesAndReturnsOk()
     {
-        var (sut, _, sniffer, naming, integrity, _) = MakeMockedSut();
+        var (sut, _, sniffer, naming, integrity, _, _) = MakeMockedSut();
         var ucPath = await MakeUcFileAsync();
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
@@ -158,7 +166,7 @@ public class FileProcessorTests : IDisposable
     [Fact]
     public async Task ProcessAsync_UnknownFormat_Quarantines_WithSidecar()
     {
-        var (sut, _, sniffer, _, _, _) = MakeMockedSut();
+        var (sut, _, sniffer, _, _, _, _) = MakeMockedSut();
         var ucPath = await MakeUcFileAsync("weird.uc");
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Unknown);
@@ -178,7 +186,7 @@ public class FileProcessorTests : IDisposable
     [Fact]
     public async Task ProcessAsync_IntegrityFailed_QuarantinesWithReason_AndSidecar()
     {
-        var (sut, _, sniffer, naming, integrity, _) = MakeMockedSut();
+        var (sut, _, sniffer, naming, integrity, _, _) = MakeMockedSut();
         var ucPath = await MakeUcFileAsync("99-bad.uc");
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
@@ -201,7 +209,7 @@ public class FileProcessorTests : IDisposable
     [Fact]
     public async Task ProcessAsync_SourceNotFound_ReturnsError()
     {
-        var (sut, _, _, _, _, _) = MakeMockedSut();
+        var (sut, _, _, _, _, _, _) = MakeMockedSut();
         var result = await sut.ProcessAsync(Path.Combine(_inputDir, "missing.uc"), DefaultOptions());
         result.Outcome.Should().Be(ScanOutcome.Error);
         result.Reason.Should().Contain("not found");
@@ -212,7 +220,7 @@ public class FileProcessorTests : IDisposable
     [Fact]
     public async Task ProcessAsync_CancellationDuringDecrypt_PropagatesOCE_AndCleansStaging()
     {
-        var (sut, decoder, _, _, _, _) = MakeMockedSut();
+        var (sut, decoder, _, _, _, _, _) = MakeMockedSut();
         var ucPath = await MakeUcFileAsync();
         decoder.Setup(d => d.DecodeAsync(It.IsAny<Stream>(), It.IsAny<Stream>(), It.IsAny<CancellationToken>()))
                .Returns<Stream, Stream, CancellationToken>(async (_, _, ct) =>
@@ -238,14 +246,16 @@ public class FileProcessorTests : IDisposable
         var n = new Mock<IFileNamer>().Object;
         var i = new Mock<ICompositeIntegrityChecker>().Object;
         var w = new Mock<IAtomicFileWriter>().Object;
+        var m = new Mock<IMetadataResolver>().Object;
         var l = new Mock<ILogger>().Object;
 
-        ((Action)(() => _ = new FileProcessor(null!, s, n, i, w, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, null!, n, i, w, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, null!, i, w, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, n, null!, w, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, n, i, null!, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, null!))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(null!, s, n, i, w, m, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, null!, n, i, w, m, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, null!, i, w, m, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, null!, w, m, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, null!, m, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, null!, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, null!))).Should().Throw<ArgumentNullException>();
     }
 
     // --- INTEGRATION test: real fixtures + real decoder/sniffer/naming/writer, mocked composite ---
@@ -261,12 +271,18 @@ public class FileProcessorTests : IDisposable
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), It.IsAny<AudioFormat>(), It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
 
+        // Real metadata resolver mocked to offline fallback so it never hits the network.
+        var metadata = new Mock<IMetadataResolver>();
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Fallback("offline-mode"));
+
         var sut = new FileProcessor(
             new XorDecoder(),
             new MagicByteFormatSniffer(),
             new StemBasedFileNamer(),
             integrity.Object,
             new AtomicFileWriter(),
+            metadata.Object,
             new Mock<ILogger>().Object);
 
         var result = await sut.ProcessAsync(ucPath, DefaultOptions());
@@ -285,7 +301,7 @@ public class FileProcessorTests : IDisposable
     public async Task ProcessAsync_StagingFile_HasCorrectExtension_BeforeIntegrityCheck()
     {
         var capturedPath = string.Empty;
-        var (sut, _, sniffer, naming, integrity, _) = MakeMockedSut();
+        var (sut, _, sniffer, naming, integrity, _, _) = MakeMockedSut();
         var ucPath = await MakeUcFileAsync("42-song.uc");
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -308,7 +324,7 @@ public class FileProcessorTests : IDisposable
     [Fact]
     public async Task ProcessAsync_QuarantineSidecar_ContainsAllSevenSpecFields()
     {
-        var (sut, _, sniffer, naming, integrity, _) = MakeMockedSut();
+        var (sut, _, sniffer, naming, integrity, _, _) = MakeMockedSut();
         var ucPath = await MakeUcFileAsync("77-meta.uc");
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
@@ -341,7 +357,7 @@ public class FileProcessorTests : IDisposable
     [Fact]
     public async Task ProcessAsync_QuarantineSidecar_SourceSize_MatchesActualBytes()
     {
-        var (sut, _, sniffer, naming, integrity, _) = MakeMockedSut();
+        var (sut, _, sniffer, naming, integrity, _, _) = MakeMockedSut();
         // MakeUcFileAsync writes 4 bytes (0xEA, 0xE7, 0x90, 0x00)
         var ucPath = await MakeUcFileAsync("size-check.uc");
         var expectedSize = new FileInfo(ucPath).Length;
@@ -362,7 +378,7 @@ public class FileProcessorTests : IDisposable
     [Fact]
     public async Task ProcessAsync_QuarantineSidecar_SourceSize_IsBase10NoSeparators()
     {
-        var (sut, _, sniffer, naming, integrity, _) = MakeMockedSut();
+        var (sut, _, sniffer, naming, integrity, _, _) = MakeMockedSut();
         // Write a larger payload so the size is > 1000 and would format with separators under some cultures
         var path = Path.Combine(_inputDir, "big.uc");
         await File.WriteAllBytesAsync(path, new byte[1234567]);
@@ -385,7 +401,7 @@ public class FileProcessorTests : IDisposable
     [Fact]
     public async Task ProcessAsync_QuarantineSidecar_SourceMtime_IsIsoRoundTrip_WithUtcOffset()
     {
-        var (sut, _, sniffer, naming, integrity, _) = MakeMockedSut();
+        var (sut, _, sniffer, naming, integrity, _, _) = MakeMockedSut();
         var ucPath = await MakeUcFileAsync("mtime-check.uc");
         var expectedMtime = new DateTimeOffset(File.GetLastWriteTimeUtc(ucPath), TimeSpan.Zero);
 
@@ -413,7 +429,7 @@ public class FileProcessorTests : IDisposable
     [Fact]
     public async Task ProcessAsync_QuarantineSidecar_RoundTrip_ReadableByTextSidecarReader_AllSevenFieldsMatch()
     {
-        var (sut, _, sniffer, naming, integrity, _) = MakeMockedSut();
+        var (sut, _, sniffer, naming, integrity, _, _) = MakeMockedSut();
         var ucPath = await MakeUcFileAsync("roundtrip.uc");
         var expectedSize = new FileInfo(ucPath).Length;
         var expectedMtime = new DateTimeOffset(File.GetLastWriteTimeUtc(ucPath), TimeSpan.Zero);
@@ -508,7 +524,7 @@ public class FileProcessorTests : IDisposable
     [Fact]
     public async Task ProcessAsync_UnknownFormat_UcBangSuffix_QuarantineNameStripsCorrectly()
     {
-        var (sut, _, sniffer, _, _, _) = MakeMockedSut();
+        var (sut, _, sniffer, _, _, _, _) = MakeMockedSut();
         var ucPath = await MakeUcFileAsync("99-mac.uc!");
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Unknown);
@@ -525,7 +541,7 @@ public class FileProcessorTests : IDisposable
     [Fact]
     public async Task ProcessAsync_QuarantineSidecarTmp_NotLeftBehind_AfterSuccess()
     {
-        var (sut, _, sniffer, naming, integrity, _) = MakeMockedSut();
+        var (sut, _, sniffer, naming, integrity, _, _) = MakeMockedSut();
         var ucPath = await MakeUcFileAsync("xx-fail.uc");
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
@@ -550,7 +566,7 @@ public class FileProcessorTests : IDisposable
     public async Task ProcessAsync_FlacStaging_HasFlacExtension_BeforeIntegrityCheck()
     {
         var capturedPath = string.Empty;
-        var (sut, _, sniffer, naming, integrity, _) = MakeMockedSut();
+        var (sut, _, sniffer, naming, integrity, _, _) = MakeMockedSut();
         var ucPath = await MakeUcFileAsync("99-song.uc");
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -565,5 +581,138 @@ public class FileProcessorTests : IDisposable
 
         result.Outcome.Should().Be(ScanOutcome.Ok);
         capturedPath.Should().EndWith(".flac");
+    }
+
+    // -------------------------------------------------------------------------
+    // v3 T14: metadata resolve + rename + OK-path sidecar
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ProcessAsync_WithMetadataSuccess_RenamesUsingArtistTitle()
+    {
+        var (sut, _, sniffer, naming, integrity, _, metadata) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("42.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Success(new SongInfo(42, "My Title", new[] { "My Artist" })));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.Is<SongInfo?>(s => s != null && s.Title == "My Title")))
+              .Returns("My Artist - My Title.flac");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        File.Exists(Path.Combine(_outputDir, "My Artist - My Title.flac")).Should().BeTrue();
+        // Success → no sidecar
+        File.Exists(Path.Combine(_outputDir, "My Artist - My Title.flac.txt")).Should().BeFalse();
+        naming.Verify(
+            n => n.GetTargetName(ucPath, AudioFormat.Flac, It.Is<SongInfo?>(s => s != null && s.MusicId == 42)),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_WithMetadataFallback_NonOffline_WritesSidecarWithReason()
+    {
+        var (sut, _, sniffer, naming, integrity, _, metadata) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("42.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Fallback("metadata-fetch-failed"));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null))
+              .Returns("42.flac");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        File.Exists(Path.Combine(_outputDir, "42.flac")).Should().BeTrue();
+        var sidecarPath = Path.Combine(_outputDir, "42.flac.txt");
+        File.Exists(sidecarPath).Should().BeTrue();
+        var sidecarText = await File.ReadAllTextAsync(sidecarPath);
+        sidecarText.Should().Contain("reason:    metadata-fetch-failed");
+        sidecarText.Should().Contain("source:    " + ucPath);
+        sidecarText.Should().Contain("format:    Flac");
+    }
+
+    [Fact]
+    public async Task ProcessAsync_WithOfflineFallback_NoSidecarWritten()
+    {
+        // MakeMockedSut already defaults the resolver to Fallback("offline-mode").
+        var (sut, _, sniffer, naming, integrity, _, _) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("42.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null))
+              .Returns("42.flac");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        File.Exists(Path.Combine(_outputDir, "42.flac")).Should().BeTrue();
+        // Spec §10 special case: offline-mode never emits an OK-path sidecar.
+        File.Exists(Path.Combine(_outputDir, "42.flac.txt")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ProcessAsync_WithDeserializeFailure_WritesSidecarReason()
+    {
+        var (sut, _, sniffer, naming, integrity, _, metadata) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("42.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Fallback("metadata-deserialize-failed"));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null))
+              .Returns("42.flac");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        var sidecarPath = Path.Combine(_outputDir, "42.flac.txt");
+        File.Exists(sidecarPath).Should().BeTrue();
+        (await File.ReadAllTextAsync(sidecarPath)).Should().Contain("reason:    metadata-deserialize-failed");
+    }
+
+    [Fact]
+    public async Task ProcessAsync_WithMetadataSuccess_UsesDefaultTemplate_NotPerRunOption()
+    {
+        // GAP DOCUMENTATION (v3 T14 → T18/T19): ScanOptions.NamingTemplate is currently
+        // IGNORED by the namer because MetadataAwareFileNamer reads NamingTemplate from
+        // the SingleInstance DefaultMetadataOptions registered in CoreModule, not from
+        // the per-run options the FileProcessor receives. CLI plumbing tasks (T18 scan,
+        // T19 watch) will bridge per-run options into the namer. When that lands, this
+        // test will FAIL and must be UPDATED to assert the new behavior. Until then it
+        // serves as a tripwire that locks in the current intentional gap.
+        //
+        // The naming mock here ignores any template the FileProcessor might pass — it
+        // returns a fixed string derived only from the resolved SongInfo. The assertion
+        // proves that even with an exotic options.NamingTemplate, the output filename
+        // is governed by the namer, not the per-run options.
+        var (sut, _, sniffer, naming, integrity, _, metadata) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("1.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Success(new SongInfo(1, "T", new[] { "A" }, Album: "AL")));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), It.IsAny<AudioFormat>(), It.IsAny<SongInfo?>()))
+              .Returns<string, AudioFormat, SongInfo?>((_, _, s) => $"{string.Join(" & ", s!.Artists)} - {s.Title}.flac");
+
+        var opts = new ScanOptions(_inputDir, _outputDir) { NamingTemplate = "{album}|{title}" };
+
+        var result = await sut.ProcessAsync(ucPath, opts);
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        File.Exists(Path.Combine(_outputDir, "A - T.flac")).Should().BeTrue();
+        File.Exists(Path.Combine(_outputDir, "AL|T.flac")).Should().BeFalse();
     }
 }

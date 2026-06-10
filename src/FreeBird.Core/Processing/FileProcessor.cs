@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FreeBird.Core.Abstractions;
 using FreeBird.Core.Decoding;
+using FreeBird.Core.Metadata;
 using FreeBird.Core.Models;
 using Serilog;
 
@@ -25,6 +26,7 @@ public sealed class FileProcessor : IFileProcessor
     private readonly IFileNamer _naming;
     private readonly ICompositeIntegrityChecker _integrity;
     private readonly IAtomicFileWriter _writer;
+    private readonly IMetadataResolver _metadata;
     private readonly ILogger _logger;
 
     public FileProcessor(
@@ -33,6 +35,7 @@ public sealed class FileProcessor : IFileProcessor
         IFileNamer naming,
         ICompositeIntegrityChecker integrity,
         IAtomicFileWriter writer,
+        IMetadataResolver metadata,
         ILogger logger)
     {
         _decoder = decoder ?? throw new ArgumentNullException(nameof(decoder));
@@ -40,6 +43,7 @@ public sealed class FileProcessor : IFileProcessor
         _naming = naming ?? throw new ArgumentNullException(nameof(naming));
         _integrity = integrity ?? throw new ArgumentNullException(nameof(integrity));
         _writer = writer ?? throw new ArgumentNullException(nameof(writer));
+        _metadata = metadata ?? throw new ArgumentNullException(nameof(metadata));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -137,8 +141,17 @@ public sealed class FileProcessor : IFileProcessor
                     Reason: integrity.Reason);
             }
 
-            // Step 7: compute final path
-            var finalName = _naming.GetTargetName(sourcePath, format, metadata: null);
+            // Step 6.5 (v3 T14): resolve metadata BEFORE naming. Pass the per-run options so
+            // the resolver honors --offline and the per-run --api-timeout. The resolver never
+            // throws — errors map to MetadataResolution.Fallback with a sidecar reason.
+            var resolution = await _metadata.ResolveAsync(sourcePath, options, cancellationToken).ConfigureAwait(false);
+            SongInfo? song = resolution is MetadataResolution.Success s ? s.Song : null;
+
+            // Step 7: compute final path.
+            // TODO(v3 T18/T19): per-run NamingTemplate from options is currently overridden by
+            // DefaultMetadataOptions; CLI flag plumbing tasks will bridge per-run options into
+            // MetadataAwareFileNamer (via child lifetime scope, method param, or per-call namer).
+            var finalName = _naming.GetTargetName(sourcePath, format, song);
             var finalPath = Path.Combine(options.OutputDirectory, finalName);
 
             // Step 8: collision check
@@ -157,6 +170,23 @@ public sealed class FileProcessor : IFileProcessor
             // Step 9: move staging -> final (atomic on same filesystem)
             Directory.CreateDirectory(options.OutputDirectory);
             File.Move(stagingPath, finalPath, overwrite: options.OnCollision == CollisionPolicy.Overwrite);
+
+            // Step 9.5 (v3 T14): emit the v3 OK-path sidecar for non-offline metadata fallback.
+            // Spec §10 special case: "offline-mode" never gets a sidecar — the user opted out
+            // of metadata explicitly, so the fallback naming is by design, not a failure.
+            // Sidecar content uses the same 7-field format as the v2 quarantine sidecar for
+            // consistency. The OK-path sidecar lives next to the SUCCESSFULLY decoded output
+            // (in OutputDirectory), not in the .freebird-failed quarantine directory.
+            if (resolution is MetadataResolution.Fallback fb && fb.SidecarReason != "offline-mode")
+            {
+                var sidecarPath = finalPath + ".txt";
+                var sidecarContent = BuildSidecarContent(
+                    sourcePath, format, integrity.LevelApplied, fb.SidecarReason, _logger);
+                File.WriteAllText(sidecarPath, sidecarContent);
+                _logger.Debug(
+                    "Wrote v3 metadata-fallback sidecar: {Path} (reason={Reason})",
+                    sidecarPath, fb.SidecarReason);
+            }
 
             return new ScanResult(
                 sourcePath,
