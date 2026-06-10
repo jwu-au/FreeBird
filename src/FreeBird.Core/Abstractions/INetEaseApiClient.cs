@@ -13,10 +13,16 @@ public interface INetEaseApiClient : IDependency
     /// Fetch song detail for one musicId.
     /// </summary>
     /// <param name="musicId">NetEase numeric song id (parsed from .uc filename).</param>
-    /// <param name="ct">Cancellation token. Honors caller's timeout/cancellation.</param>
+    /// <param name="timeout">
+    /// Per-request timeout; the client creates a linked CTS internally so a long-delayed
+    /// response yields <see cref="NetEaseApiResult.Timeout"/> without throwing.
+    /// </param>
+    /// <param name="ct">
+    /// Cancellation token. User cancellation propagates as <see cref="OperationCanceledException"/>.
+    /// </param>
     /// <returns>
-    /// One of Success/NotFound/NetworkError/Timeout/DeserializationError. Never throws —
-    /// errors are returned as union cases.
+    /// One of Success/NotFound/NetworkError/Timeout/DeserializationError. Never throws
+    /// for transport/HTTP/JSON errors — those are returned as union cases.
     /// </returns>
-    Task<NetEaseApiResult> GetSongDetailAsync(long musicId, CancellationToken ct);
+    Task<NetEaseApiResult> GetSongDetailAsync(long musicId, TimeSpan timeout, CancellationToken ct);
 }
