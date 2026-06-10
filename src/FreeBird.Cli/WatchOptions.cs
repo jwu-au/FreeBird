@@ -23,6 +23,13 @@ public sealed class WatchOptions
     public bool Verbose { get; init; }
     public bool Quiet { get; init; }
 
+    // T19b — v3 metadata flags, mirrored from Core.Models.WatchOptions / IMetadataOptions.
+    public string NamingTemplate { get; init; } = "{artist} - {title}";
+    public bool Offline { get; init; }
+    public int ApiTimeoutSeconds { get; init; } = 10;
+    public int ApiRateLimit { get; init; }
+    public bool WriteTags { get; init; }
+
     /// <summary>
     /// Parses a duration string. Accepts: bare integer (= seconds), "Ns" (seconds), "Nm" (minutes).
     /// Rejects all other suffixes (e.g. "5h"). Throws <see cref="ArgumentException"/> on invalid input.

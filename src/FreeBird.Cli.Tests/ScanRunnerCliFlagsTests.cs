@@ -9,7 +9,11 @@ namespace FreeBird.Cli.Tests;
 
 /// <summary>
 /// T15.6 D1 + D2 coverage: --quiet flag, verbose+quiet conflict, --integrity l3 fail-fast.
+/// T19b additions: --naming-template / --offline / --api-timeout / --api-rate-limit / --write-tags
+/// parsing + validation (run via <see cref="CliRoot"/> with <see cref="ScanRunner.RunnerOverride"/>
+/// to capture the resolved <see cref="ScanOptions"/> without running the orchestrator).
 /// </summary>
+[Collection("ConsoleRedirect")]
 public class ScanRunnerCliFlagsTests : IDisposable
 {
     private readonly string _tempDir;
@@ -108,5 +112,121 @@ public class ScanRunnerCliFlagsTests : IDisposable
         {
             return false;
         }
+    }
+
+    // --- T19b: --naming-template / --offline / --api-timeout / --api-rate-limit / --write-tags ---
+
+    private async Task<(int exit, string stdout, string stderr, ScanOptions? captured)>
+        InvokeScanAsync(params string[] args)
+    {
+        var origOut = Console.Out;
+        var origErr = Console.Error;
+        var outBuf = new StringWriter();
+        var errBuf = new StringWriter();
+        Console.SetOut(outBuf);
+        Console.SetError(errBuf);
+        ScanOptions? captured = null;
+        var origOverride = ScanRunner.RunnerOverride;
+        ScanRunner.RunnerOverride = opts => { captured = opts; return Task.FromResult(0); };
+        try
+        {
+            var exit = await CliRoot.InvokeAsync(args);
+            return (exit, outBuf.ToString(), errBuf.ToString(), captured);
+        }
+        finally
+        {
+            ScanRunner.RunnerOverride = origOverride;
+            Console.SetOut(origOut);
+            Console.SetError(origErr);
+        }
+    }
+
+    [Fact]
+    public async Task Scan_Defaults_AreSpecCorrect()
+    {
+        var (exit, _, _, captured) = await InvokeScanAsync("scan", _inputDir, "-o", _outputDir);
+
+        exit.Should().Be(0);
+        captured.Should().NotBeNull();
+        captured!.NamingTemplate.Should().Be("{artist} - {title}");
+        captured.Offline.Should().BeFalse();
+        captured.ApiTimeoutSeconds.Should().Be(10);
+        captured.ApiRateLimit.Should().Be(0);
+        captured.WriteTags.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Scan_AllFlagsParsed()
+    {
+        var (exit, _, _, captured) = await InvokeScanAsync(
+            "scan", _inputDir, "-o", _outputDir,
+            "--naming-template", "{musicId}_{title}",
+            "--offline",
+            "--api-timeout", "25",
+            "--api-rate-limit", "5",
+            "--write-tags");
+
+        exit.Should().Be(0);
+        captured.Should().NotBeNull();
+        captured!.NamingTemplate.Should().Be("{musicId}_{title}");
+        captured.Offline.Should().BeTrue();
+        captured.ApiTimeoutSeconds.Should().Be(25);
+        captured.ApiRateLimit.Should().Be(5);
+        captured.WriteTags.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Scan_NamingTemplate_Empty_Exit2()
+    {
+        var (exit, _, stderr, _) = await InvokeScanAsync(
+            "scan", _inputDir, "-o", _outputDir, "--naming-template", "");
+
+        exit.Should().Be(2);
+        stderr.Should().Contain("template");
+    }
+
+    [Fact]
+    public async Task Scan_NamingTemplate_NoPlaceholder_Exit2()
+    {
+        var (exit, _, stderr, _) = await InvokeScanAsync(
+            "scan", _inputDir, "-o", _outputDir, "--naming-template", "justastring");
+
+        exit.Should().Be(2);
+        stderr.Should().Contain("template");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(301)]
+    public async Task Scan_ApiTimeout_OutOfRange_Exit2(int seconds)
+    {
+        var (exit, _, stderr, _) = await InvokeScanAsync(
+            "scan", _inputDir, "-o", _outputDir, "--api-timeout", seconds.ToString());
+
+        exit.Should().Be(2);
+        stderr.Should().Contain("api-timeout");
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(101)]
+    public async Task Scan_ApiRateLimit_OutOfRange_Exit2(int rate)
+    {
+        var (exit, _, stderr, _) = await InvokeScanAsync(
+            "scan", _inputDir, "-o", _outputDir, "--api-rate-limit", rate.ToString());
+
+        exit.Should().Be(2);
+        stderr.Should().Contain("api-rate-limit");
+    }
+
+    [Fact]
+    public async Task Scan_Offline_Switch_NoArg_ParsesTrue()
+    {
+        var (exit, _, _, captured) = await InvokeScanAsync(
+            "scan", _inputDir, "-o", _outputDir, "--offline");
+
+        exit.Should().Be(0);
+        captured.Should().NotBeNull();
+        captured!.Offline.Should().BeTrue();
     }
 }

@@ -3,17 +3,18 @@ using FreeBird.Core.Abstractions;
 namespace FreeBird.Core.Models;
 
 /// <summary>
-/// Default <see cref="IMetadataOptions"/> implementation registered in
+/// Startup-default <see cref="IMetadataOptions"/> registered in
 /// <see cref="DependencyInjection.CoreModule"/> as a SingleInstance.
 ///
-/// Why this exists: <c>MetadataAwareFileNamer</c> (v3 <see cref="IFileNamer"/>) takes
-/// <see cref="IMetadataOptions"/> as a constructor dependency, but per-run options
-/// (<c>ScanOptions</c>, <c>WatchOptions</c>) flow through orchestrator method
-/// parameters, NOT the container. The container needs *some* binding for the
-/// graph to resolve at startup; this record provides spec defaults
-/// (template="{artist} - {title}", Offline=false, ApiTimeoutSeconds=10,
-/// ApiRateLimit=0, WriteTags=false). The actual per-invocation options
-/// override these via the resolver/processor call path (T14+).
+/// Why this exists: <c>IMetadataResolver</c> (and any other container-built
+/// consumer of <see cref="IMetadataOptions"/>) needs *some* binding so the
+/// Autofac graph can resolve at compose time, before any per-run
+/// <c>ScanOptions</c> / <c>WatchOptions</c> exists. Per-invocation options
+/// flow through orchestrator and processor method parameters (T14+ / T19a+),
+/// so these defaults are only ever observed when no per-run override is in
+/// effect — the spec defaults match those on <see cref="ScanOptions"/> and
+/// <see cref="WatchOptions"/> (template="{artist} - {title}", Offline=false,
+/// ApiTimeoutSeconds=10, ApiRateLimit=0, WriteTags=false).
 ///
 /// This type is deliberately NOT registered via <see cref="IDependency"/> —
 /// it's an options record, not a service. CoreModule registers it explicitly.

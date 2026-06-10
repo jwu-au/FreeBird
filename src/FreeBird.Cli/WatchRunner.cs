@@ -296,7 +296,14 @@ public sealed class WatchRunner
         PollInterval: cli.PollInterval,
         StabilityChecks: cli.StabilityChecks,
         MinFileSizeBytes: cli.MinFileSize,
-        SkipInitialScan: cli.SkipInitialScan);
+        SkipInitialScan: cli.SkipInitialScan)
+    {
+        NamingTemplate = cli.NamingTemplate,
+        Offline = cli.Offline,
+        ApiTimeoutSeconds = cli.ApiTimeoutSeconds,
+        ApiRateLimit = cli.ApiRateLimit,
+        WriteTags = cli.WriteTags,
+    };
 
     private static IContainer BuildContainer(ILogger logger)
     {

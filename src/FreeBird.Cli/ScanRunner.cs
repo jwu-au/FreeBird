@@ -33,6 +33,14 @@ public static class ScanRunner
     /// </summary>
     public static Action<ContainerBuilder>? AdditionalContainerSetup { get; set; }
 
+    /// <summary>
+    /// Test-only hook (v3 T19b): if non-null, invoked AFTER directory validation but
+    /// BEFORE the Autofac container / orchestrator are built. Lets tests capture the
+    /// resolved <see cref="ScanOptions"/> (with all CLI-derived metadata flags applied)
+    /// without running the real scan. Mirrors <c>WatchCommand.HandlerOverride</c>.
+    /// </summary>
+    public static Func<ScanOptions, Task<int>>? RunnerOverride { get; set; }
+
     public static async Task<int> RunAsync(
         string inputDir,
         string outputDir,
@@ -41,6 +49,11 @@ public static class ScanRunner
         CollisionPolicy collision,
         bool verbose,
         bool quiet = false,
+        string namingTemplate = "{artist} - {title}",
+        bool offline = false,
+        int apiTimeoutSeconds = 10,
+        int apiRateLimit = 0,
+        bool writeTags = false,
         CancellationToken externalToken = default)
     {
         // D1: --verbose and --quiet are mutually exclusive — caller must pick one.
@@ -65,6 +78,25 @@ public static class ScanRunner
             }
 
             Directory.CreateDirectory(outputDir);
+
+            // T19b: short-circuit for tests that only want to capture the resolved options.
+            if (RunnerOverride is not null)
+            {
+                var capturedOptions = new ScanOptions(
+                    Path.GetFullPath(inputDir),
+                    Path.GetFullPath(outputDir),
+                    integrity,
+                    Math.Max(1, concurrency),
+                    collision)
+                {
+                    NamingTemplate = namingTemplate,
+                    Offline = offline,
+                    ApiTimeoutSeconds = apiTimeoutSeconds,
+                    ApiRateLimit = apiRateLimit,
+                    WriteTags = writeTags,
+                };
+                return await RunnerOverride(capturedOptions);
+            }
 
             await using var container = BuildContainer(logger);
             await using var scope = container.BeginLifetimeScope();
@@ -95,7 +127,14 @@ public static class ScanRunner
                 Path.GetFullPath(outputDir),
                 integrity,
                 Math.Max(1, concurrency),
-                collision);
+                collision)
+            {
+                NamingTemplate = namingTemplate,
+                Offline = offline,
+                ApiTimeoutSeconds = apiTimeoutSeconds,
+                ApiRateLimit = apiRateLimit,
+                WriteTags = writeTags,
+            };
 
             ConsoleCancelEventHandler handler = (_, e) =>
             {

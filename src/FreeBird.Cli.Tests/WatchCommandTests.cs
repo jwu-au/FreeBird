@@ -224,4 +224,112 @@ public class WatchCommandTests : IDisposable
             WatchCommand.HandlerOverride = origHandler;
         }
     }
+
+    // --- T19b: --naming-template / --offline / --api-timeout / --api-rate-limit / --write-tags ---
+
+    private async Task<(int exit, string stdout, string stderr, WatchOptions? captured)>
+        InvokeWatchAsync(params string[] args)
+    {
+        WatchOptions? captured = null;
+        var origHandler = WatchCommand.HandlerOverride;
+        WatchCommand.HandlerOverride = opts => { captured = opts; return Task.FromResult(0); };
+        try
+        {
+            var (exit, stdout, stderr) = await InvokeAsync(args);
+            return (exit, stdout, stderr, captured);
+        }
+        finally
+        {
+            WatchCommand.HandlerOverride = origHandler;
+        }
+    }
+
+    [Fact]
+    public async Task Watch_MetadataDefaults_AreSpecCorrect()
+    {
+        var (exit, _, _, captured) = await InvokeWatchAsync("watch", _inputDir, "--output", _outputDir);
+
+        exit.Should().Be(0);
+        captured.Should().NotBeNull();
+        captured!.NamingTemplate.Should().Be("{artist} - {title}");
+        captured.Offline.Should().BeFalse();
+        captured.ApiTimeoutSeconds.Should().Be(10);
+        captured.ApiRateLimit.Should().Be(0);
+        captured.WriteTags.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Watch_AllMetadataFlagsParsed()
+    {
+        var (exit, _, _, captured) = await InvokeWatchAsync(
+            "watch", _inputDir, "--output", _outputDir,
+            "--naming-template", "{album}/{title}",
+            "--offline",
+            "--api-timeout", "30",
+            "--api-rate-limit", "7",
+            "--write-tags");
+
+        exit.Should().Be(0);
+        captured.Should().NotBeNull();
+        captured!.NamingTemplate.Should().Be("{album}/{title}");
+        captured.Offline.Should().BeTrue();
+        captured.ApiTimeoutSeconds.Should().Be(30);
+        captured.ApiRateLimit.Should().Be(7);
+        captured.WriteTags.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Watch_NamingTemplate_Empty_Exit2()
+    {
+        var (exit, _, stderr, _) = await InvokeWatchAsync(
+            "watch", _inputDir, "--output", _outputDir, "--naming-template", "");
+
+        exit.Should().Be(2);
+        stderr.Should().Contain("template");
+    }
+
+    [Fact]
+    public async Task Watch_NamingTemplate_NoPlaceholder_Exit2()
+    {
+        var (exit, _, stderr, _) = await InvokeWatchAsync(
+            "watch", _inputDir, "--output", _outputDir, "--naming-template", "justastring");
+
+        exit.Should().Be(2);
+        stderr.Should().Contain("template");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(301)]
+    public async Task Watch_ApiTimeout_OutOfRange_Exit2(int seconds)
+    {
+        var (exit, _, stderr, _) = await InvokeWatchAsync(
+            "watch", _inputDir, "--output", _outputDir, "--api-timeout", seconds.ToString());
+
+        exit.Should().Be(2);
+        stderr.Should().Contain("api-timeout");
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(101)]
+    public async Task Watch_ApiRateLimit_OutOfRange_Exit2(int rate)
+    {
+        var (exit, _, stderr, _) = await InvokeWatchAsync(
+            "watch", _inputDir, "--output", _outputDir, "--api-rate-limit", rate.ToString());
+
+        exit.Should().Be(2);
+        stderr.Should().Contain("api-rate-limit");
+    }
+
+    [Fact]
+    public async Task Watch_Offline_Switch_NoArg_ParsesTrue()
+    {
+        var (exit, _, _, captured) = await InvokeWatchAsync(
+            "watch", _inputDir, "--output", _outputDir, "--offline");
+
+        exit.Should().Be(0);
+        captured.Should().NotBeNull();
+        captured!.Offline.Should().BeTrue();
+    }
 }

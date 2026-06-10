@@ -58,10 +58,40 @@ public static class CliRoot
             Description = "Quiet logging (Warning level and above only). Mutually exclusive with --verbose.",
         };
 
+        // T19b — v3 metadata flags.
+        var namingTemplateOpt = new Option<string>("--naming-template")
+        {
+            Description = "Filename template using {artist} {title} {album} {musicId}.",
+            DefaultValueFactory = _ => "{artist} - {title}",
+        };
+
+        var offlineOpt = new Option<bool>("--offline")
+        {
+            Description = "Skip NetEase API; use musicId fallback naming.",
+        };
+
+        var apiTimeoutOpt = new Option<int>("--api-timeout")
+        {
+            Description = "NetEase API request timeout in seconds (1–300).",
+            DefaultValueFactory = _ => 10,
+        };
+
+        var apiRateLimitOpt = new Option<int>("--api-rate-limit")
+        {
+            Description = "Max NetEase API calls per second (0–100, 0 = unlimited).",
+            DefaultValueFactory = _ => 0,
+        };
+
+        var writeTagsOpt = new Option<bool>("--write-tags")
+        {
+            Description = "Write metadata tags into decoded audio files.",
+        };
+
         var scanCommand = new Command("scan",
             "Decode all .uc/.uc! files in <input-dir>, write decoded audio to --output.")
         {
             inputArg, outputOpt, integrityOpt, concurrencyOpt, collisionOpt, verboseOpt, quietOpt,
+            namingTemplateOpt, offlineOpt, apiTimeoutOpt, apiRateLimitOpt, writeTagsOpt,
         };
 
         scanCommand.SetAction(async (parseResult, ct) =>
@@ -73,8 +103,23 @@ public static class CliRoot
             var collision = parseResult.GetValue(collisionOpt);
             var verbose = parseResult.GetValue(verboseOpt);
             var quiet = parseResult.GetValue(quietOpt);
+            var namingTemplate = parseResult.GetValue(namingTemplateOpt) ?? "{artist} - {title}";
+            var offline = parseResult.GetValue(offlineOpt);
+            var apiTimeout = parseResult.GetValue(apiTimeoutOpt);
+            var apiRateLimit = parseResult.GetValue(apiRateLimitOpt);
+            var writeTags = parseResult.GetValue(writeTagsOpt);
 
-            return await ScanRunner.RunAsync(input, output, integrity, concurrency, collision, verbose, quiet, ct);
+            var validationExit = MetadataFlagsValidator.Validate(
+                namingTemplate, apiTimeout, apiRateLimit, Console.Error);
+            if (validationExit is not null)
+            {
+                return validationExit.Value;
+            }
+
+            return await ScanRunner.RunAsync(
+                input, output, integrity, concurrency, collision, verbose, quiet,
+                namingTemplate, offline, apiTimeout, apiRateLimit, writeTags,
+                ct);
         });
 
         var root = new RootCommand("FreeBird — NetEase Music cache decoder")

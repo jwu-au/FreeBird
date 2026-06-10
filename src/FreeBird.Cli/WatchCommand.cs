@@ -98,6 +98,35 @@ public static class WatchCommand
             Description = "Quiet logging (Warning level and above only). Mutually exclusive with --verbose.",
         };
 
+        // T19b — v3 metadata flags (identical to scan).
+        var namingTemplateOpt = new Option<string>("--naming-template")
+        {
+            Description = "Filename template using {artist} {title} {album} {musicId}.",
+            DefaultValueFactory = _ => "{artist} - {title}",
+        };
+
+        var offlineOpt = new Option<bool>("--offline")
+        {
+            Description = "Skip NetEase API; use musicId fallback naming.",
+        };
+
+        var apiTimeoutOpt = new Option<int>("--api-timeout")
+        {
+            Description = "NetEase API request timeout in seconds (1–300).",
+            DefaultValueFactory = _ => 10,
+        };
+
+        var apiRateLimitOpt = new Option<int>("--api-rate-limit")
+        {
+            Description = "Max NetEase API calls per second (0–100, 0 = unlimited).",
+            DefaultValueFactory = _ => 0,
+        };
+
+        var writeTagsOpt = new Option<bool>("--write-tags")
+        {
+            Description = "Write metadata tags into decoded audio files.",
+        };
+
         var watchCommand = new Command(
             "watch",
             "Continuously watch <input-dir> for new .uc/.uc! files and decode them into --output.")
@@ -115,6 +144,11 @@ public static class WatchCommand
             noLogFileOpt,
             verboseOpt,
             quietOpt,
+            namingTemplateOpt,
+            offlineOpt,
+            apiTimeoutOpt,
+            apiRateLimitOpt,
+            writeTagsOpt,
         };
 
         watchCommand.SetAction(async (parseResult, ct) =>
@@ -132,6 +166,19 @@ public static class WatchCommand
             var noLogFile = parseResult.GetValue(noLogFileOpt);
             var verbose = parseResult.GetValue(verboseOpt);
             var quiet = parseResult.GetValue(quietOpt);
+            var namingTemplate = parseResult.GetValue(namingTemplateOpt) ?? "{artist} - {title}";
+            var offline = parseResult.GetValue(offlineOpt);
+            var apiTimeout = parseResult.GetValue(apiTimeoutOpt);
+            var apiRateLimit = parseResult.GetValue(apiRateLimitOpt);
+            var writeTags = parseResult.GetValue(writeTagsOpt);
+
+            // T19b: validate metadata flags (template + api-timeout + api-rate-limit).
+            var metaValidationExit = MetadataFlagsValidator.Validate(
+                namingTemplate, apiTimeout, apiRateLimit, Console.Error);
+            if (metaValidationExit is not null)
+            {
+                return metaValidationExit.Value;
+            }
 
             // Mutex: --verbose & --quiet
             if (verbose && quiet)
@@ -221,6 +268,11 @@ public static class WatchCommand
                 NoLogFile = noLogFile,
                 Verbose = verbose,
                 Quiet = quiet,
+                NamingTemplate = namingTemplate,
+                Offline = offline,
+                ApiTimeoutSeconds = apiTimeout,
+                ApiRateLimit = apiRateLimit,
+                WriteTags = writeTags,
             };
 
             if (HandlerOverride is not null)
