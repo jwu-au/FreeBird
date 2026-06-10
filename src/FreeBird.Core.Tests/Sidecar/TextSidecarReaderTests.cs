@@ -362,4 +362,39 @@ public sealed class TextSidecarReaderTests : IDisposable
         var rec = await _reader.TryReadAsync(path);
         rec.Should().BeNull();
     }
+
+    // ----- v3 reason tolerance (OA3) -----
+    // The reader treats the `reason` VALUE as opaque freeform text; only field
+    // NAMES are whitelisted. These cases lock in forward-tolerance for the new
+    // v3 reason strings and any future reason values, including Unicode and
+    // odd characters. No production code change is expected.
+
+    [Theory]
+    [InlineData("metadata-fetch-failed")]
+    [InlineData("metadata-empty")]
+    [InlineData("metadata-deserialize-failed")]
+    [InlineData("tag-write-failed")]
+    [InlineData("some-future-v4-reason")]
+    [InlineData("reason with spaces and 'quotes' and \"dquotes\"")]
+    [InlineData("中文原因")]
+    public async Task TryReadAsync_ArbitraryReasonString_PreservedExactly(string reason)
+    {
+        var path = await WriteTextFileAsync(new[]
+        {
+            "timestamp: 2026-06-10T13:50:00.0000000Z",
+            "source:    /tmp/foo.uc",
+            "format:    Flac",
+            "integrity: L3",
+            $"reason:    {reason}",
+            "source_size: 4096",
+            "source_mtime: 2026-06-10T13:49:00.0000000Z",
+        });
+
+        var rec = await _reader.TryReadAsync(path);
+
+        rec.Should().NotBeNull();
+        rec!.Reason.Should().Be(reason);
+        rec.Format.Should().Be(AudioFormat.Flac);
+        rec.IntegrityLevel.Should().Be(IntegrityLevel.L3);
+    }
 }
