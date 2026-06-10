@@ -2,11 +2,13 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FreeBird.Cli;
 using FreeBird.Cli.Tests.E2E.Stubs;
 using FreeBird.Core.Models;
+using FreeBird.Core.Processing;
 using Xunit;
 
 namespace FreeBird.Cli.Tests.E2E;
@@ -121,11 +123,12 @@ public class MetadataE2ETests
     }
 
     [Fact]
-    public async Task Scan_When_Api_Returns_EmptySongs_WritesSidecar_WithMetadataEmptyReason()
+    public async Task Scan_When_Api_Returns_EmptySongs_WritesMarker_WithMetadataEmptyStatus()
     {
         var (input, output, _) = await SetupAsync("3367798042.uc");
         // Spec §10: NetEase returns 200 with an empty songs array for unknown ids.
         // NetEaseApiClient maps that to NotFound -> MetadataResolver -> Fallback("metadata-empty").
+        // v3.0.1 T04: the .flac.txt sidecar is gone; the outcome is in the JSON marker.
         using var stub = new StubNetEaseServer
         {
             ResponseJson = """{"songs":[],"code":200}""",
@@ -150,10 +153,18 @@ public class MetadataE2ETests
             exit.Should().Be(ScanRunner.ExitOk);
             var expected = Path.Combine(output, "3367798042.flac");
             File.Exists(expected).Should().BeTrue("empty-songs fallback uses {musicId}.{ext}");
-            var sidecarPath = expected + ".txt";
-            File.Exists(sidecarPath).Should().BeTrue("metadata-empty fallback must write a sidecar next to the output");
-            var sidecar = await File.ReadAllTextAsync(sidecarPath);
-            sidecar.Should().Contain("reason:").And.Contain("metadata-empty");
+            File.Exists(expected + ".txt").Should().BeFalse("v3.0.1: .flac.txt sidecar is gone — outcome is in the JSON marker");
+            // Marker stem is "3367798042" (the source filename was "3367798042.uc").
+            var markerPath = Path.Combine(output, ResolutionMarkerSerializer.MarkerSubdir, "3367798042.json");
+            File.Exists(markerPath).Should().BeTrue("metadata-empty fallback writes a JSON marker");
+            var markerJson = await File.ReadAllTextAsync(markerPath);
+            var marker = JsonSerializer.Deserialize<ResolutionMarker>(markerJson, ResolutionMarkerJson.Options);
+            marker.Should().NotBeNull();
+            marker!.Status.Should().Be(MarkerStatus.MetadataEmpty);
+            marker.Reason.Should().Be("metadata-empty");
+            marker.RetryAfter.Should().NotBeNull();
+            (marker.RetryAfter!.Value - marker.ResolvedAt).TotalSeconds
+                .Should().BeApproximately(TimeSpan.FromDays(7).TotalSeconds, 2.0);
             stub.RequestCount.Should().Be(1);
         }
         finally
@@ -164,11 +175,12 @@ public class MetadataE2ETests
     }
 
     [Fact]
-    public async Task Scan_When_Api_TimesOut_WritesSidecar_WithMetadataFetchFailedReason()
+    public async Task Scan_When_Api_TimesOut_WritesMarker_WithMetadataFetchFailedStatus()
     {
         var (input, output, _) = await SetupAsync("3367798042.uc");
         // 3-second stub delay vs. 1-second --api-timeout: the per-request linked CTS fires
         // and NetEaseApiClient returns Timeout -> Fallback("metadata-fetch-failed").
+        // v3.0.1 T04: the .flac.txt sidecar is gone; the outcome is in the JSON marker.
         using var stub = new StubNetEaseServer
         {
             ResponseJson = """{"songs":[],"code":200}""",
@@ -193,10 +205,17 @@ public class MetadataE2ETests
             exit.Should().Be(ScanRunner.ExitOk);
             var expected = Path.Combine(output, "3367798042.flac");
             File.Exists(expected).Should().BeTrue("timeout still produces a decoded file with fallback name");
-            var sidecarPath = expected + ".txt";
-            File.Exists(sidecarPath).Should().BeTrue("timeout fallback must write a sidecar");
-            var sidecar = await File.ReadAllTextAsync(sidecarPath);
-            sidecar.Should().Contain("reason:").And.Contain("metadata-fetch-failed");
+            File.Exists(expected + ".txt").Should().BeFalse("v3.0.1: .flac.txt sidecar is gone — outcome is in the JSON marker");
+            var markerPath = Path.Combine(output, ResolutionMarkerSerializer.MarkerSubdir, "3367798042.json");
+            File.Exists(markerPath).Should().BeTrue("timeout fallback writes a JSON marker");
+            var markerJson = await File.ReadAllTextAsync(markerPath);
+            var marker = JsonSerializer.Deserialize<ResolutionMarker>(markerJson, ResolutionMarkerJson.Options);
+            marker.Should().NotBeNull();
+            marker!.Status.Should().Be(MarkerStatus.MetadataFetchFailed);
+            marker.Reason.Should().Be("metadata-fetch-failed");
+            marker.RetryAfter.Should().NotBeNull();
+            (marker.RetryAfter!.Value - marker.ResolvedAt).TotalSeconds
+                .Should().BeApproximately(TimeSpan.FromHours(1).TotalSeconds, 2.0);
         }
         finally
         {

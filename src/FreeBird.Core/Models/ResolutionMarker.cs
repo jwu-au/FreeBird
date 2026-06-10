@@ -75,6 +75,23 @@ public sealed record ResolutionMarker
     /// <see cref="Status"/> is <see cref="MarkerStatus.Resolved"/>. Serialized as explicit <c>null</c>.
     /// </summary>
     public DateTimeOffset? RetryAfter { get; init; }
+
+    /// <summary>
+    /// Outcome of the post-rename tag-write step (v3.0.1 T04 additive field).
+    /// One of <c>"ok"</c>, <c>"skipped"</c>, <c>"failed"</c>, or <c>null</c>.
+    /// <c>null</c> when <c>WriteTags</c> was false (the default).
+    /// Forward-compatible: pre-v3.0.1 markers omit this field and still parse.
+    /// </summary>
+    [JsonPropertyName("tag_write_status")]
+    public string? TagWriteStatus { get; init; }
+
+    /// <summary>
+    /// Reason code when <see cref="TagWriteStatus"/> is <c>"failed"</c>
+    /// (e.g. <c>"tag-tool-missing"</c>, <c>"tag-write-failed"</c>). Otherwise <c>null</c>.
+    /// Forward-compatible: pre-v3.0.1 markers omit this field and still parse.
+    /// </summary>
+    [JsonPropertyName("tag_write_reason")]
+    public string? TagWriteReason { get; init; }
 }
 
 /// <summary>

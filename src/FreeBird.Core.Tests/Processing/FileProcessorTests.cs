@@ -77,13 +77,23 @@ public class FileProcessorTests : IDisposable
                    await output.WriteAsync(new byte[] { 1, 2, 3, 4 }, ct);
                });
 
-        // default metadata: Fallback("offline-mode") — same observable behavior as v1/v2
-        // (no sidecar, namer receives null SongInfo so it falls back to musicId/stem naming).
+        // default metadata: Success with a stub song. v3.0.1 T04 requires that the
+        // resolution outcome be writable to the JSON marker via MapToMarkerStatus.
+        // The previous default `Fallback("offline-mode")` is reserved for the real
+        // resolver's offline-flag branch and intentionally throws if mapped (the
+        // invariant is "offline-mode reason ⇔ options.Offline=true"). Tests that
+        // need a different outcome (fallback, deserialize-failure, success-with-tags)
+        // override this setup explicitly.
         metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new MetadataResolution.Fallback("offline-mode"));
+                .ReturnsAsync(new MetadataResolution.Success(new SongInfo(0, "Stub", new[] { "Stub" })));
 
         var logger = new Mock<ILogger>().Object;
-        var sut = new FileProcessor(decoder.Object, sniffer.Object, naming.Object, integrity.Object, writer.Object, metadata.Object, tagWriter.Object, logger);
+        // v3.0.1 T04: FileProcessor now writes a JSON resolution marker on the OK path.
+        // Inject a REAL ResolutionMarkerSerializer so marker writes hit the same temp
+        // _outputDir the tests already inspect; the serializer is stateless and writes
+        // atomically to <outputDir>/.freebird-resolved/<stem>.json.
+        var markerSerializer = new ResolutionMarkerSerializer(logger);
+        var sut = new FileProcessor(decoder.Object, sniffer.Object, naming.Object, integrity.Object, writer.Object, metadata.Object, tagWriter.Object, markerSerializer, logger);
         return (sut, decoder, sniffer, naming, integrity, writer, metadata, tagWriter);
     }
 
@@ -256,15 +266,17 @@ public class FileProcessorTests : IDisposable
         var m = new Mock<IMetadataResolver>().Object;
         var t = new Mock<ITagWriter>().Object;
         var l = new Mock<ILogger>().Object;
+        var ms = new ResolutionMarkerSerializer(l);
 
-        ((Action)(() => _ = new FileProcessor(null!, s, n, i, w, m, t, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, null!, n, i, w, m, t, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, null!, i, w, m, t, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, n, null!, w, m, t, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, n, i, null!, m, t, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, null!, t, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, null!, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, t, null!))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(null!, s, n, i, w, m, t, ms, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, null!, n, i, w, m, t, ms, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, null!, i, w, m, t, ms, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, null!, w, m, t, ms, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, null!, m, t, ms, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, null!, t, ms, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, null!, ms, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, t, null!, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, t, ms, null!))).Should().Throw<ArgumentNullException>();
     }
 
     // --- INTEGRATION test: real fixtures + real decoder/sniffer/naming/writer, mocked composite ---
@@ -285,6 +297,7 @@ public class FileProcessorTests : IDisposable
         metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new MetadataResolution.Fallback("offline-mode"));
 
+        var logger = new Mock<ILogger>().Object;
         var sut = new FileProcessor(
             new XorDecoder(),
             new MagicByteFormatSniffer(),
@@ -293,9 +306,15 @@ public class FileProcessorTests : IDisposable
             new AtomicFileWriter(),
             metadata.Object,
             new Mock<ITagWriter>().Object,
-            new Mock<ILogger>().Object);
+            new ResolutionMarkerSerializer(logger),
+            logger);
 
-        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+        // v3.0.1: Offline=true mirrors the mocked Fallback("offline-mode") resolver
+        // and suppresses the JSON marker write (the marker invariant is "offline-mode
+        // reason ⇔ Offline=true"). The original test purpose — no network calls — is
+        // preserved.
+        var opts = DefaultOptions() with { Offline = true };
+        var result = await sut.ProcessAsync(ucPath, opts);
 
         result.Outcome.Should().Be(ScanOutcome.Ok);
         result.Format.Should().Be(AudioFormat.Mp3);
@@ -623,8 +642,11 @@ public class FileProcessorTests : IDisposable
     }
 
     [Fact]
-    public async Task ProcessAsync_WithMetadataFallback_NonOffline_WritesSidecarWithReason()
+    public async Task ProcessAsync_WithMetadataFallback_NonOffline_WritesMarkerWithReason()
     {
+        // v3.0.1 T04: metadata fallback no longer writes a .flac.txt sidecar;
+        // the outcome is now recorded in the JSON resolution marker under
+        // <outputDir>/.freebird-resolved/<stem>.json with Status=MetadataFetchFailed.
         var (sut, _, sniffer, naming, integrity, _, metadata, _) = MakeMockedSut();
         var ucPath = await MakeUcFileAsync("42.uc");
 
@@ -640,38 +662,56 @@ public class FileProcessorTests : IDisposable
 
         result.Outcome.Should().Be(ScanOutcome.Ok);
         File.Exists(Path.Combine(_outputDir, "42.flac")).Should().BeTrue();
-        var sidecarPath = Path.Combine(_outputDir, "42.flac.txt");
-        File.Exists(sidecarPath).Should().BeTrue();
-        var sidecarText = await File.ReadAllTextAsync(sidecarPath);
-        sidecarText.Should().Contain("reason:    metadata-fetch-failed");
-        sidecarText.Should().Contain("source:    " + ucPath);
-        sidecarText.Should().Contain("format:    Flac");
+        // Legacy .flac.txt sidecar is gone in v3.0.1.
+        File.Exists(Path.Combine(_outputDir, "42.flac.txt")).Should().BeFalse();
+        // JSON marker is written with the fallback reason.
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "42");
+        File.Exists(markerPath).Should().BeTrue();
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.Status.Should().Be(MarkerStatus.MetadataFetchFailed);
+        marker.Reason.Should().Be("metadata-fetch-failed");
+        marker.SourcePath.Should().Be(ucPath);
+        marker.Format.Should().Be("Flac");
+        marker.OutputName.Should().Be("42.flac");
     }
 
     [Fact]
     public async Task ProcessAsync_WithOfflineFallback_NoSidecarWritten()
     {
-        // MakeMockedSut already defaults the resolver to Fallback("offline-mode").
-        var (sut, _, sniffer, naming, integrity, _, _, _) = MakeMockedSut();
+        // Spec §10 + v3.0.1 D5: when Offline=true, the resolver returns
+        // Fallback("offline-mode") AND the JSON marker write is suppressed.
+        // The legacy .flac.txt OK-path sidecar is also gone (T04).
+        var (sut, _, sniffer, naming, integrity, _, metadata, _) = MakeMockedSut();
         var ucPath = await MakeUcFileAsync("42.uc");
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Fallback("offline-mode"));
         naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null, It.IsAny<string?>()))
               .Returns("42.flac");
 
-        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+        var opts = DefaultOptions() with { Offline = true };
+        var result = await sut.ProcessAsync(ucPath, opts);
 
         result.Outcome.Should().Be(ScanOutcome.Ok);
         File.Exists(Path.Combine(_outputDir, "42.flac")).Should().BeTrue();
-        // Spec §10 special case: offline-mode never emits an OK-path sidecar.
+        // Spec §10 special case: offline-mode never emits a .flac.txt sidecar.
         File.Exists(Path.Combine(_outputDir, "42.flac.txt")).Should().BeFalse();
+        // v3.0.1 T04 / D5: Offline=true also suppresses the JSON resolution marker.
+        var markerDir = Path.Combine(_outputDir, ResolutionMarkerSerializer.MarkerSubdir);
+        if (Directory.Exists(markerDir))
+        {
+            Directory.GetFiles(markerDir, "*.json").Should().BeEmpty();
+        }
     }
 
     [Fact]
-    public async Task ProcessAsync_WithDeserializeFailure_WritesSidecarReason()
+    public async Task ProcessAsync_WithDeserializeFailure_WritesMarkerReason()
     {
+        // v3.0.1 T04: deserialize-failure is captured in the JSON marker now.
         var (sut, _, sniffer, naming, integrity, _, metadata, _) = MakeMockedSut();
         var ucPath = await MakeUcFileAsync("42.uc");
 
@@ -686,9 +726,13 @@ public class FileProcessorTests : IDisposable
         var result = await sut.ProcessAsync(ucPath, DefaultOptions());
 
         result.Outcome.Should().Be(ScanOutcome.Ok);
-        var sidecarPath = Path.Combine(_outputDir, "42.flac.txt");
-        File.Exists(sidecarPath).Should().BeTrue();
-        (await File.ReadAllTextAsync(sidecarPath)).Should().Contain("reason:    metadata-deserialize-failed");
+        File.Exists(Path.Combine(_outputDir, "42.flac.txt")).Should().BeFalse();
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "42");
+        File.Exists(markerPath).Should().BeTrue();
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.Status.Should().Be(MarkerStatus.MetadataDeserializeFailed);
+        marker.Reason.Should().Be("metadata-deserialize-failed");
     }
 
     [Fact]
@@ -788,7 +832,9 @@ public class FileProcessorTests : IDisposable
     public async Task ProcessAsync_WriteTagsTrue_ButMetadataFallback_DoesNotInvokeTagger()
     {
         // When metadata fell back, there's no SongInfo to write — the tagger must
-        // never be called. The fallback sidecar still fires (T14 contract).
+        // never be called. v3.0.1 T04: the fallback outcome is now recorded in
+        // the JSON marker (Status=MetadataFetchFailed, TagWriteStatus="skipped"),
+        // not in a .flac.txt sidecar.
         var (sut, _, sniffer, naming, integrity, _, metadata, tagWriter) = MakeMockedSut();
         var ucPath = await MakeUcFileAsync("42.uc");
 
@@ -805,19 +851,21 @@ public class FileProcessorTests : IDisposable
 
         result.Outcome.Should().Be(ScanOutcome.Ok);
         File.Exists(Path.Combine(_outputDir, "42.flac")).Should().BeTrue();
-        // Metadata-fallback sidecar still emitted (T14):
-        File.Exists(Path.Combine(_outputDir, "42.flac.txt")).Should().BeTrue();
+        // v3.0.1: metadata-fallback no longer emits .flac.txt; it's in the JSON marker.
+        File.Exists(Path.Combine(_outputDir, "42.flac.txt")).Should().BeFalse();
         tagWriter.Verify(
             t => t.WriteAsync(It.IsAny<string>(), It.IsAny<AudioFormat>(), It.IsAny<SongInfo>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
     [Fact]
-    public async Task ProcessAsync_TagWriteFails_WritesSidecarWithTagWriteFailedReason_ButKeepsFile()
+    public async Task ProcessAsync_TagWriteFails_WritesMarkerWithTagWriteFailed_ButKeepsFile()
     {
         // CRITICAL CONTRACT: tag-write failure must NEVER delete or roll back the
-        // decoded audio file. The file is the user's primary artifact; the sidecar
+        // decoded audio file. The file is the user's primary artifact; the marker
         // is supplementary.
+        // v3.0.1 T04: tag-write outcomes now live in the JSON marker via
+        // TagWriteStatus="failed" + TagWriteReason="tag-tool-missing".
         var (sut, _, sniffer, naming, integrity, _, metadata, tagWriter) = MakeMockedSut();
         var ucPath = await MakeUcFileAsync("42.uc");
 
@@ -837,16 +885,21 @@ public class FileProcessorTests : IDisposable
         result.Outcome.Should().Be(ScanOutcome.Ok);
         var expectedFinal = Path.Combine(_outputDir, "A - T.flac");
         File.Exists(expectedFinal).Should().BeTrue();   // FILE PRESERVED — non-negotiable
-        var sidecarPath = expectedFinal + ".txt";
-        File.Exists(sidecarPath).Should().BeTrue();
-        (await File.ReadAllTextAsync(sidecarPath)).Should().Contain("reason:    tag-tool-missing");
+        File.Exists(expectedFinal + ".txt").Should().BeFalse();   // legacy sidecar gone
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "42");
+        File.Exists(markerPath).Should().BeTrue();
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.Status.Should().Be(MarkerStatus.Resolved);
+        marker.TagWriteStatus.Should().Be("failed");
+        marker.TagWriteReason.Should().Be("tag-tool-missing");
     }
 
     [Fact]
-    public async Task ProcessAsync_TagWriteThrows_StillKeepsFile_AndWritesGenericSidecar()
+    public async Task ProcessAsync_TagWriteThrows_StillKeepsFile_AndWritesMarkerWithTagWriteFailed()
     {
         // Defensive: an UNEXPECTED throw from the tagger (not a Failed result) still
-        // must not lose the file. The catch-all maps to reason "tag-write-failed".
+        // must not lose the file. The catch-all maps to TagWriteReason="tag-write-failed".
         var (sut, _, sniffer, naming, integrity, _, metadata, tagWriter) = MakeMockedSut();
         var ucPath = await MakeUcFileAsync("42.uc");
 
@@ -866,8 +919,341 @@ public class FileProcessorTests : IDisposable
         result.Outcome.Should().Be(ScanOutcome.Ok);
         var expectedFinal = Path.Combine(_outputDir, "A - T.flac");
         File.Exists(expectedFinal).Should().BeTrue();   // FILE PRESERVED
-        var sidecarPath = expectedFinal + ".txt";
-        File.Exists(sidecarPath).Should().BeTrue();
-        (await File.ReadAllTextAsync(sidecarPath)).Should().Contain("reason:    tag-write-failed");
+        File.Exists(expectedFinal + ".txt").Should().BeFalse();   // legacy sidecar gone
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "42");
+        File.Exists(markerPath).Should().BeTrue();
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.Status.Should().Be(MarkerStatus.Resolved);
+        marker.TagWriteStatus.Should().Be("failed");
+        marker.TagWriteReason.Should().Be("tag-write-failed");
+    }
+
+    // -------------------------------------------------------------------------
+    // v3.0.1 T04: JSON resolution marker tests (per task spec; 11 new tests)
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ProcessAsync_SuccessfulResolution_WritesResolvedMarker()
+    {
+        var (sut, _, sniffer, naming, integrity, _, metadata, _) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("42.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L3));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Success(new SongInfo(42, "My Title", new[] { "My Artist" })));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
+              .Returns("My Artist - My Title.flac");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "42");
+        File.Exists(markerPath).Should().BeTrue();
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.Status.Should().Be(MarkerStatus.Resolved);
+        marker.OutputName.Should().Be("My Artist - My Title.flac");
+        marker.Reason.Should().BeNull();
+        marker.RetryAfter.Should().BeNull();
+        marker.TagWriteStatus.Should().BeNull();
+        marker.TagWriteReason.Should().BeNull();
+        marker.MusicId.Should().Be("42");
+        marker.SourceStem.Should().Be("42");
+    }
+
+    [Fact]
+    public async Task ProcessAsync_MetadataEmpty_WritesMarkerWith7dRetry()
+    {
+        var (sut, _, sniffer, naming, integrity, _, metadata, _) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("42.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Fallback("metadata-empty"));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null, It.IsAny<string?>()))
+              .Returns("42.flac");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "42");
+        File.Exists(markerPath).Should().BeTrue();
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.Status.Should().Be(MarkerStatus.MetadataEmpty);
+        marker.Reason.Should().Be("metadata-empty");
+        marker.RetryAfter.Should().NotBeNull();
+        var actualDelay = (marker.RetryAfter!.Value - marker.ResolvedAt).TotalSeconds;
+        var expectedDelay = TimeSpan.FromDays(7).TotalSeconds;
+        actualDelay.Should().BeApproximately(expectedDelay, 2.0);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_MetadataFetchFailed_WritesMarkerWith1hRetry()
+    {
+        var (sut, _, sniffer, naming, integrity, _, metadata, _) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("42.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Fallback("metadata-fetch-failed"));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null, It.IsAny<string?>()))
+              .Returns("42.flac");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "42");
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.Status.Should().Be(MarkerStatus.MetadataFetchFailed);
+        marker.Reason.Should().Be("metadata-fetch-failed");
+        var actualDelay = (marker.RetryAfter!.Value - marker.ResolvedAt).TotalSeconds;
+        actualDelay.Should().BeApproximately(TimeSpan.FromHours(1).TotalSeconds, 2.0);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_MetadataDeserializeFailed_WritesMarkerWith24hRetry()
+    {
+        var (sut, _, sniffer, naming, integrity, _, metadata, _) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("42.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Fallback("metadata-deserialize-failed"));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null, It.IsAny<string?>()))
+              .Returns("42.flac");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "42");
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.Status.Should().Be(MarkerStatus.MetadataDeserializeFailed);
+        marker.Reason.Should().Be("metadata-deserialize-failed");
+        var actualDelay = (marker.RetryAfter!.Value - marker.ResolvedAt).TotalSeconds;
+        actualDelay.Should().BeApproximately(TimeSpan.FromHours(24).TotalSeconds, 2.0);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_OfflineMode_DoesNotWriteMarker()
+    {
+        var (sut, _, sniffer, naming, integrity, _, metadata, _) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("42.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Fallback("offline-mode"));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null, It.IsAny<string?>()))
+              .Returns("42.flac");
+
+        var opts = DefaultOptions() with { Offline = true };
+        var result = await sut.ProcessAsync(ucPath, opts);
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        var markerDir = Path.Combine(_outputDir, ResolutionMarkerSerializer.MarkerSubdir);
+        if (Directory.Exists(markerDir))
+        {
+            Directory.GetFiles(markerDir, "*.json").Should().BeEmpty();
+        }
+    }
+
+    [Fact]
+    public async Task ProcessAsync_OfflineMode_DoesNotDeleteExistingMarker()
+    {
+        // Pre-seed a marker; offline run must not touch it.
+        var preSeed = new ResolutionMarker
+        {
+            Schema = 1,
+            SourceStem = "42",
+            MusicId = "42",
+            SourcePath = "/old/path.uc",
+            SourceSize = 1024L,
+            SourceMtime = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero),
+            ResolvedAt = new DateTimeOffset(2026, 1, 1, 1, 0, 0, TimeSpan.Zero),
+            Status = MarkerStatus.Resolved,
+            OutputName = "old.flac",
+            Format = "Flac",
+            Integrity = "L1",
+            NamingTemplate = "{artist} - {title}",
+        };
+        var preSeedSer = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        preSeedSer.WriteAtomic(_outputDir, preSeed);
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "42");
+        var preSeedBytes = await File.ReadAllBytesAsync(markerPath);
+
+        var (sut, _, sniffer, naming, integrity, _, metadata, _) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("42.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Fallback("offline-mode"));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null, It.IsAny<string?>()))
+              .Returns("42.flac");
+
+        var opts = DefaultOptions() with { Offline = true };
+        var result = await sut.ProcessAsync(ucPath, opts);
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        File.Exists(markerPath).Should().BeTrue();
+        var afterBytes = await File.ReadAllBytesAsync(markerPath);
+        afterBytes.Should().Equal(preSeedBytes, "offline mode must NEVER mutate an existing marker");
+    }
+
+    [Fact]
+    public async Task ProcessAsync_MarkerSourceStemMatchesStemBasedFileNamer()
+    {
+        var (sut, _, sniffer, naming, integrity, _, metadata, _) = MakeMockedSut();
+        var compositeName = "3367798042-_-_5999-_-_abc.uc!";
+        var ucPath = Path.Combine(_inputDir, compositeName);
+        await File.WriteAllBytesAsync(ucPath, new byte[] { 0xEA, 0xE7, 0x90, 0x00 });
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Success(new SongInfo(3367798042L, "T", new[] { "A" })));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
+              .Returns("A - T.flac");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        var expectedStem = StemBasedFileNamer.GetStem(ucPath);
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, expectedStem);
+        File.Exists(markerPath).Should().BeTrue();
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.SourceStem.Should().Be(expectedStem);
+        marker.MusicId.Should().Be("3367798042");
+    }
+
+    [Fact]
+    public async Task ProcessAsync_CollisionSkip_WritesResolvedMarkerWithExistingFilename()
+    {
+        // D7(a): on collision-skip we keep the existing file untouched but still
+        // write a marker so the watch decider treats this source as resolved.
+        var (sut, _, sniffer, naming, integrity, _, metadata, _) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("42.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Success(new SongInfo(42, "T", new[] { "A" })));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
+              .Returns("A - T.flac");
+
+        var existing = Path.Combine(_outputDir, "A - T.flac");
+        var preSeedBytes = new byte[] { 0xAB, 0xCD, 0xEF };
+        await File.WriteAllBytesAsync(existing, preSeedBytes);
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions(collision: CollisionPolicy.Skip));
+
+        result.Outcome.Should().Be(ScanOutcome.Skipped);
+        var afterBytes = await File.ReadAllBytesAsync(existing);
+        afterBytes.Should().Equal(preSeedBytes, "collision-skip must not overwrite the existing file");
+
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "42");
+        File.Exists(markerPath).Should().BeTrue();
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.Status.Should().Be(MarkerStatus.Resolved);
+        marker.OutputName.Should().Be("A - T.flac");
+    }
+
+    [Fact]
+    public async Task ProcessAsync_AudioFileMoveFails_NoMarkerWritten()
+    {
+        // Create a DIRECTORY at the final path so File.Move(staging, final) throws.
+        // The marker write must be unreachable (ordering invariant: marker after move).
+        var (sut, _, sniffer, naming, integrity, _, metadata, _) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("42.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Success(new SongInfo(42, "T", new[] { "A" })));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
+              .Returns("collision-dir.flac");
+
+        // Pre-create a DIRECTORY at the target path so File.Move throws.
+        // Use CollisionPolicy.Overwrite so the existence check doesn't short-circuit to Skipped.
+        Directory.CreateDirectory(Path.Combine(_outputDir, "collision-dir.flac"));
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions(collision: CollisionPolicy.Overwrite));
+
+        result.Outcome.Should().Be(ScanOutcome.Error);
+        var markerDir = Path.Combine(_outputDir, ResolutionMarkerSerializer.MarkerSubdir);
+        if (Directory.Exists(markerDir))
+        {
+            Directory.GetFiles(markerDir, "*.json").Should().BeEmpty();
+        }
+    }
+
+    [Fact]
+    public async Task ProcessAsync_WriteTagsTrue_TagWriteSucceeds_MarkerHasTagWriteStatusOk()
+    {
+        var (sut, _, sniffer, naming, integrity, _, metadata, tagWriter) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("42.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Success(new SongInfo(42, "T", new[] { "A" })));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
+              .Returns("A - T.flac");
+        // tagWriter default already returns TagWriteResult.Success.Instance.
+
+        var opts = new ScanOptions(_inputDir, _outputDir) { WriteTags = true };
+        var result = await sut.ProcessAsync(ucPath, opts);
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "42");
+        File.Exists(markerPath).Should().BeTrue();
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.TagWriteStatus.Should().Be("ok");
+        marker.TagWriteReason.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ProcessAsync_WriteTagsFalse_MarkerHasTagWriteStatusNull()
+    {
+        var (sut, _, sniffer, naming, integrity, _, metadata, _) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("42.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Success(new SongInfo(42, "T", new[] { "A" })));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
+              .Returns("A - T.flac");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());   // WriteTags=false
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "42");
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.TagWriteStatus.Should().BeNull();
+        marker.TagWriteReason.Should().BeNull();
     }
 }

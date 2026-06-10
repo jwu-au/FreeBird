@@ -253,4 +253,83 @@ public class ResolutionMarkerTests
         Assert.Contains("\"reason\": null", json);
         Assert.Contains("\"retry_after\": null", json);
     }
+
+    // ---- v3.0.1 T04: tag-write fields (Option A additive schema) ----
+
+    [Fact]
+    public void RoundTrip_TagWriteFailed_PreservesTagWriteFields()
+    {
+        var marker = BuildResolvedMarker() with
+        {
+            TagWriteStatus = "failed",
+            TagWriteReason = "tag-tool-missing",
+        };
+
+        var json = JsonSerializer.Serialize(marker, ResolutionMarkerJson.Options);
+        var roundTripped = JsonSerializer.Deserialize<ResolutionMarker>(json, ResolutionMarkerJson.Options);
+
+        Assert.NotNull(roundTripped);
+        Assert.Equal("failed", roundTripped!.TagWriteStatus);
+        Assert.Equal("tag-tool-missing", roundTripped.TagWriteReason);
+        Assert.Equal(marker, roundTripped);
+    }
+
+    [Fact]
+    public void RoundTrip_DefaultTagWriteFields_BothNull()
+    {
+        var marker = BuildResolvedMarker();
+
+        var json = JsonSerializer.Serialize(marker, ResolutionMarkerJson.Options);
+        var roundTripped = JsonSerializer.Deserialize<ResolutionMarker>(json, ResolutionMarkerJson.Options);
+
+        Assert.NotNull(roundTripped);
+        Assert.Null(roundTripped!.TagWriteStatus);
+        Assert.Null(roundTripped.TagWriteReason);
+    }
+
+    [Fact]
+    public void Deserialize_PreV301Json_WithoutTagWriteFields_StillParses()
+    {
+        // Pre-v3.0.1 markers (v3.0.1 launch shape minus the two new fields) must
+        // still deserialize cleanly. This pins down forward-compatibility — the
+        // additive fields must not require [JsonRequired].
+        var json = """
+        {
+          "schema": 1,
+          "source_stem": "3367798042-_-_5999-_-_abc",
+          "music_id": "3367798042",
+          "source_path": "/tmp/foo.uc!",
+          "source_size": 1024,
+          "source_mtime": "2026-06-10T18:42:11.7587980+00:00",
+          "resolved_at": "2026-06-10T23:18:01.1234567+00:00",
+          "status": "resolved",
+          "output_name": "out.flac",
+          "format": "Flac",
+          "integrity": "L3",
+          "naming_template": "{artist} - {title}",
+          "reason": null,
+          "retry_after": null
+        }
+        """;
+
+        var marker = JsonSerializer.Deserialize<ResolutionMarker>(json, ResolutionMarkerJson.Options);
+
+        Assert.NotNull(marker);
+        Assert.Null(marker!.TagWriteStatus);
+        Assert.Null(marker.TagWriteReason);
+    }
+
+    [Fact]
+    public void Serialize_NullTagWriteFields_ExplicitInOutput()
+    {
+        // DefaultIgnoreCondition.Never means nullable fields render as explicit
+        // `null` in the JSON, not omitted. This makes pre/post-v3.0.1 marker
+        // bytes diffable and keeps the schema visually self-documenting.
+        var marker = BuildResolvedMarker();
+
+        var json = JsonSerializer.Serialize(marker, ResolutionMarkerJson.Options);
+
+        Assert.Contains("\"tag_write_status\": null", json);
+        Assert.Contains("\"tag_write_reason\": null", json);
+    }
 }

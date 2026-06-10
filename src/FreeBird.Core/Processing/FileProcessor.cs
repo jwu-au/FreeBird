@@ -8,6 +8,7 @@ using FreeBird.Core.Abstractions;
 using FreeBird.Core.Decoding;
 using FreeBird.Core.Metadata;
 using FreeBird.Core.Models;
+using FreeBird.Core.Naming;
 using Serilog;
 
 namespace FreeBird.Core.Processing;
@@ -28,6 +29,7 @@ public sealed class FileProcessor : IFileProcessor
     private readonly IAtomicFileWriter _writer;
     private readonly IMetadataResolver _metadata;
     private readonly ITagWriter _tagWriter;
+    private readonly ResolutionMarkerSerializer _markerSerializer;
     private readonly ILogger _logger;
 
     public FileProcessor(
@@ -38,6 +40,7 @@ public sealed class FileProcessor : IFileProcessor
         IAtomicFileWriter writer,
         IMetadataResolver metadata,
         ITagWriter tagWriter,
+        ResolutionMarkerSerializer markerSerializer,
         ILogger logger)
     {
         _decoder = decoder ?? throw new ArgumentNullException(nameof(decoder));
@@ -47,6 +50,7 @@ public sealed class FileProcessor : IFileProcessor
         _writer = writer ?? throw new ArgumentNullException(nameof(writer));
         _metadata = metadata ?? throw new ArgumentNullException(nameof(metadata));
         _tagWriter = tagWriter ?? throw new ArgumentNullException(nameof(tagWriter));
+        _markerSerializer = markerSerializer ?? throw new ArgumentNullException(nameof(markerSerializer));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -95,6 +99,11 @@ public sealed class FileProcessor : IFileProcessor
             return new ScanResult(sourcePath, ScanOutcome.Error, Reason: $"Decrypt failed: {ex.Message}");
         }
 
+        // Source stem is used by quarantine naming, OK-path naming, and the JSON
+        // resolution marker. Compute once via the shared StemBasedFileNamer helper
+        // so all three downstream consumers agree on the same stem string.
+        var sourceStem = StemBasedFileNamer.GetStem(sourcePath);
+
         try
         {
             // Step 3: sniff format
@@ -103,9 +112,6 @@ public sealed class FileProcessor : IFileProcessor
             // Step 4: unknown -> quarantine
             if (format == AudioFormat.Unknown)
             {
-                // Use the naming strategy's stem extractor for consistency with the OK-path naming
-                // (cross-runtime safe; .NET 10 + Mono variants handle .uc! differently in Path.GetFileNameWithoutExtension).
-                var sourceStem = StemBasedFileNamer.GetStem(sourcePath);
                 var quarantinedPath = QuarantineFile(
                     stagingPath, failedDir, $"{sourceStem}.bin",
                     sourcePath, AudioFormat.Unknown, levelApplied: null, reason: "Unknown format");
@@ -161,6 +167,23 @@ public sealed class FileProcessor : IFileProcessor
             if (File.Exists(finalPath) && options.OnCollision == CollisionPolicy.Skip)
             {
                 TryDelete(stagingPath);
+
+                // v3.0.1 T04 / D7(a): on collision-skip we still write a marker so
+                // the watch skip decider recognizes the existing file as resolved
+                // and stops infinite re-processing. OutputName is the existing
+                // colliding file's basename (which is identical to finalPath here).
+                if (!options.Offline)
+                {
+                    var skipMarker = BuildMarker(
+                        sourcePath, sourceStem, finalPath, format,
+                        integrity.LevelApplied,
+                        MapToMarkerStatus(resolution),
+                        options.NamingTemplate,
+                        tagWriteStatus: null,
+                        tagWriteReason: null);
+                    _markerSerializer.WriteAtomic(options.OutputDirectory, skipMarker);
+                }
+
                 return new ScanResult(
                     sourcePath,
                     ScanOutcome.Skipped,
@@ -176,71 +199,77 @@ public sealed class FileProcessor : IFileProcessor
 
             // Step 9.5 (v3 T18): optional post-rename tag-write.
             //   * Only fires when WriteTags=true AND metadata resolved successfully.
-            //   * Failure is captured as a sidecar reason but NEVER deletes/rolls-back
+            //   * Failure is captured in the JSON marker but NEVER deletes/rolls-back
             //     the decoded audio file — the user's primary artifact is preserved.
             //   * Catch-all Exception is intentional: ITagWriter is a long-tail of
             //     possible failure modes (missing tool, corrupt file, locking, etc.)
             //     and the contract is "never lose decoded audio".
-            string? tagFailReason = null;
-            if (options.WriteTags && song is not null)
+            //
+            // v3.0.1 T04: the legacy `<output>.flac.txt` sidecar is gone. Tag-write
+            // outcomes now live in the JSON marker via the TagWriteStatus / TagWriteReason
+            // fields (Option A additive schema).
+            string? tagWriteStatus = null;
+            string? tagWriteReason = null;
+            if (options.WriteTags)
             {
-                try
+                if (song is null)
                 {
-                    var tagResult = await _tagWriter
-                        .WriteAsync(finalPath, format, song, cancellationToken)
-                        .ConfigureAwait(false);
-                    if (tagResult is TagWriteResult.Failed failed)
+                    // Metadata fell back — there is nothing to tag. Skipped, not failed.
+                    tagWriteStatus = "skipped";
+                }
+                else
+                {
+                    try
                     {
-                        tagFailReason = failed.SidecarReason;
-                        _logger.Warning(
-                            "Tag write failed for {Path}: {Reason}",
-                            finalPath, failed.SidecarReason);
+                        var tagResult = await _tagWriter
+                            .WriteAsync(finalPath, format, song, cancellationToken)
+                            .ConfigureAwait(false);
+                        if (tagResult is TagWriteResult.Failed failed)
+                        {
+                            tagWriteStatus = "failed";
+                            tagWriteReason = failed.SidecarReason;
+                            _logger.Warning(
+                                "Tag write failed for {Path}: {Reason}",
+                                finalPath, failed.SidecarReason);
+                        }
+                        else
+                        {
+                            tagWriteStatus = "ok";
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        tagWriteStatus = "failed";
+                        tagWriteReason = "tag-write-failed";
+                        _logger.Warning(ex, "Unexpected tag-write error for {Path}", finalPath);
                     }
                 }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    tagFailReason = "tag-write-failed";
-                    _logger.Warning(ex, "Unexpected tag-write error for {Path}", finalPath);
-                }
             }
 
-            // Step 9.6 (v3 T14 + T18): emit the v3 OK-path sidecar.
-            // Two distinct sidecar sources may apply:
-            //   (a) Metadata fallback (Fallback with reason != "offline-mode") — from T14.
-            //   (b) Tag-write failure (only possible when metadata SUCCEEDED) — from T18.
-            // These cases are MUTUALLY EXCLUSIVE: tag-write is only attempted on
-            // MetadataResolution.Success, which precludes the Fallback branch. The
-            // explicit `else if` documents that invariant.
-            //
-            // Spec §10 special case: "offline-mode" never gets a sidecar — the user
-            // opted out of metadata explicitly, so fallback naming is by design.
-            // Sidecar content uses the same 7-field format as the v2 quarantine
-            // sidecar for consistency. The OK-path sidecar lives next to the
-            // SUCCESSFULLY decoded output (in OutputDirectory), not in the
-            // .freebird-failed quarantine directory.
-            string? sidecarReason = null;
-            if (resolution is MetadataResolution.Fallback fb && fb.SidecarReason != "offline-mode")
+            // Step 9.6 (v3.0.1 T04): write the JSON resolution marker.
+            //   * Suppressed entirely when --offline (the user has opted out of
+            //     metadata resolution; markers would be misleading and may shadow
+            //     a real marker from a non-offline run — see D5).
+            //   * Otherwise emitted for EVERY outcome (success, metadata-empty,
+            //     metadata-fetch-failed, metadata-deserialize-failed) so the watch
+            //     skip decider can suppress infinite re-processing.
+            //   * The marker is the LAST step. If audio File.Move above threw,
+            //     this code is unreachable and no marker is written — preserving
+            //     the invariant that markers only reference real on-disk audio.
+            if (!options.Offline)
             {
-                sidecarReason = fb.SidecarReason;
-            }
-            else if (tagFailReason is not null)
-            {
-                sidecarReason = tagFailReason;
-            }
-
-            if (sidecarReason is not null)
-            {
-                var sidecarPath = finalPath + ".txt";
-                var sidecarContent = BuildSidecarContent(
-                    sourcePath, format, integrity.LevelApplied, sidecarReason, _logger);
-                File.WriteAllText(sidecarPath, sidecarContent);
-                _logger.Debug(
-                    "Wrote v3 OK-path sidecar: {Path} (reason={Reason})",
-                    sidecarPath, sidecarReason);
+                var marker = BuildMarker(
+                    sourcePath, sourceStem, finalPath, format,
+                    integrity.LevelApplied,
+                    MapToMarkerStatus(resolution),
+                    options.NamingTemplate,
+                    tagWriteStatus,
+                    tagWriteReason);
+                _markerSerializer.WriteAtomic(options.OutputDirectory, marker);
             }
 
             return new ScanResult(
@@ -380,4 +409,121 @@ public sealed class FileProcessor : IFileProcessor
         AudioFormat.M4a => ".m4a",
         _ => ".bin",
     };
+
+    /// <summary>
+    /// Map a <see cref="MetadataResolution"/> outcome into a <see cref="MarkerStatus"/>
+    /// for the JSON resolution marker. Caller MUST suppress the marker for
+    /// <c>options.Offline == true</c>; this method treats the offline reason as a
+    /// programmer error because the offline branch should never reach a marker write.
+    /// Unknown fallback reasons are conservatively mapped to <see cref="MarkerStatus.MetadataFetchFailed"/>
+    /// (the most common transient failure class) with a DBG log.
+    /// </summary>
+    private MarkerStatus MapToMarkerStatus(MetadataResolution resolution)
+    {
+        switch (resolution)
+        {
+            case MetadataResolution.Success:
+                return MarkerStatus.Resolved;
+            case MetadataResolution.Fallback fb:
+                return fb.SidecarReason switch
+                {
+                    "metadata-empty" => MarkerStatus.MetadataEmpty,
+                    "metadata-fetch-failed" => MarkerStatus.MetadataFetchFailed,
+                    "metadata-deserialize-failed" => MarkerStatus.MetadataDeserializeFailed,
+                    "offline-mode" => throw new InvalidOperationException(
+                        "MapToMarkerStatus must not be called for offline-mode fallback; the caller is required to skip marker writes when Offline=true."),
+                    _ => MapUnknownFallback(fb.SidecarReason),
+                };
+            default:
+                throw new InvalidOperationException($"Unknown MetadataResolution variant: {resolution.GetType().Name}");
+        }
+    }
+
+    private MarkerStatus MapUnknownFallback(string reason)
+    {
+        _logger.Debug(
+            "Unrecognized MetadataResolution.Fallback reason '{Reason}'; mapping to MetadataFetchFailed for marker",
+            reason);
+        return MarkerStatus.MetadataFetchFailed;
+    }
+
+    /// <summary>
+    /// Build a <see cref="ResolutionMarker"/> from the per-attempt context. Centralizes
+    /// the field mapping so the OK path, the collision-skip path, and (in future) the
+    /// L1-fail path all serialize identical schemas.
+    ///
+    /// Source size/mtime are stat'd here, mirroring the race-handling rule used by
+    /// <see cref="BuildSidecarContent"/>: if the source has vanished, we fall back to
+    /// size=0 + mtime=epoch and log a WARN. The unusual values make the marker
+    /// recognizable as "source disappeared mid-flight" rather than corrupting the
+    /// freshness key.
+    /// </summary>
+    private ResolutionMarker BuildMarker(
+        string sourcePath,
+        string sourceStem,
+        string finalPath,
+        AudioFormat format,
+        IntegrityLevel levelApplied,
+        MarkerStatus status,
+        string namingTemplate,
+        string? tagWriteStatus,
+        string? tagWriteReason)
+    {
+        long sourceSize;
+        DateTimeOffset sourceMtime;
+        try
+        {
+            var info = new FileInfo(sourcePath);
+            if (info.Exists)
+            {
+                sourceSize = info.Length;
+                sourceMtime = new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero);
+            }
+            else
+            {
+                _logger.Warning("Source file vanished before marker write: {SourcePath}", sourcePath);
+                sourceSize = 0;
+                sourceMtime = DateTimeOffset.UnixEpoch;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.Warning(ex, "Failed to stat source file before marker write: {SourcePath}", sourcePath);
+            sourceSize = 0;
+            sourceMtime = DateTimeOffset.UnixEpoch;
+        }
+
+        var resolvedAt = DateTimeOffset.Now;
+        var retry = ResolutionMarkerRetry.For(status);
+        DateTimeOffset? retryAfter = retry.HasValue ? resolvedAt + retry.Value : null;
+
+        string? reason = status switch
+        {
+            MarkerStatus.Resolved => null,
+            MarkerStatus.MetadataEmpty => "metadata-empty",
+            MarkerStatus.MetadataFetchFailed => "metadata-fetch-failed",
+            MarkerStatus.MetadataDeserializeFailed => "metadata-deserialize-failed",
+            _ => throw new InvalidOperationException($"Unknown MarkerStatus: {status}"),
+        };
+
+        return new ResolutionMarker
+        {
+            Schema = 1,
+            SourceStem = sourceStem,
+            MusicId = MusicIdExtractor.TryExtractAsString(sourcePath) ?? "",
+            SourcePath = sourcePath,
+            SourceSize = sourceSize,
+            SourceMtime = sourceMtime,
+            ResolvedAt = resolvedAt,
+            Status = status,
+            OutputName = Path.GetFileName(finalPath),
+            Format = format.ToString(),
+            Integrity = levelApplied.ToString(),
+            NamingTemplate = namingTemplate,
+            Reason = reason,
+            RetryAfter = retryAfter,
+            TagWriteStatus = tagWriteStatus,
+            TagWriteReason = tagWriteReason,
+        };
+    }
 }
