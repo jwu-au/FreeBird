@@ -39,5 +39,12 @@ public sealed class CoreModule : Module
         builder.RegisterType<FreeBird.Core.Watch.SizeStabilityCompletionDetector>()
                .As<FreeBird.Core.Abstractions.ICompletionDetector>()
                .SingleInstance();
+
+        // NamingTemplateRenderer is pure / stateless. SingleInstance is a small
+        // allocation optimization — no per-scope copies of an immutable function object.
+        // Last-registration-wins overrides the bulk InstancePerLifetimeScope above.
+        builder.RegisterType<FreeBird.Core.Naming.NamingTemplateRenderer>()
+               .As<FreeBird.Core.Abstractions.INamingTemplateRenderer>()
+               .SingleInstance();
     }
 }

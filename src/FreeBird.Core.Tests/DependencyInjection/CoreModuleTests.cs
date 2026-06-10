@@ -32,6 +32,7 @@ public class CoreModuleTests
     [InlineData(typeof(ICompositeIntegrityChecker))]
     [InlineData(typeof(IFileProcessor))]
     [InlineData(typeof(IScanOrchestrator))]
+    [InlineData(typeof(INamingTemplateRenderer))]
     public void CoreModule_ResolvesAllPublicInterfaces(Type serviceType)
     {
         using var container = BuildContainer();
@@ -77,6 +78,19 @@ public class CoreModuleTests
         var a = scope1.Resolve<IXorDecoder>();
         var b = scope2.Resolve<IXorDecoder>();
         a.Should().NotBeSameAs(b);
+    }
+
+    [Fact]
+    public void CoreModule_NamingTemplateRenderer_IsSingleton_AcrossScopes()
+    {
+        // NamingTemplateRenderer is registered SingleInstance (pure / stateless).
+        // The same instance should be returned across different lifetime scopes.
+        using var container = BuildContainer();
+        using var scope1 = container.BeginLifetimeScope();
+        using var scope2 = container.BeginLifetimeScope();
+        var a = scope1.Resolve<INamingTemplateRenderer>();
+        var b = scope2.Resolve<INamingTemplateRenderer>();
+        a.Should().BeSameAs(b);
     }
 
     [Fact]
