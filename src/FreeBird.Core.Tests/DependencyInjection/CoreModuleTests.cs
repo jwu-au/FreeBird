@@ -36,6 +36,7 @@ public class CoreModuleTests
     [InlineData(typeof(IScanOrchestrator))]
     [InlineData(typeof(INamingTemplateRenderer))]
     [InlineData(typeof(INetEaseApiClient))]
+    [InlineData(typeof(IMetadataResolver))]
     public void CoreModule_ResolvesAllPublicInterfaces(Type serviceType)
     {
         using var container = BuildContainer();
