@@ -1,5 +1,7 @@
 using System;
+using System.IO;
 using System.Linq;
+using System.Net.Http;
 using Autofac;
 using FluentAssertions;
 using FreeBird.Core.Abstractions;
@@ -129,5 +131,70 @@ public class CoreModuleTests
             container.IsRegistered(primaryInterface).Should().BeTrue(
                 $"interface {primaryInterface.Name} should be registered for concrete {concreteType.Name}");
         }
+    }
+
+    // ------------------------------------------------------------------
+    // T09 — Autofac-native HttpClient SingleInstance registration
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void Container_Resolves_HttpClient()
+    {
+        using var container = BuildContainer();
+        var client = container.Resolve<HttpClient>();
+        client.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void HttpClient_IsSingleInstance()
+    {
+        using var container = BuildContainer();
+        var a = container.Resolve<HttpClient>();
+        var b = container.Resolve<HttpClient>();
+        a.Should().BeSameAs(b);
+    }
+
+    [Fact]
+    public void HttpClient_HasUserAgent()
+    {
+        using var container = BuildContainer();
+        var client = container.Resolve<HttpClient>();
+        var ua = client.DefaultRequestHeaders.UserAgent.ToString();
+        ua.Should().Contain("Mozilla/5.0");
+        ua.Should().Contain("Safari/605.1.15");
+    }
+
+    [Fact]
+    public void HttpClient_HasCeilingTimeout()
+    {
+        using var container = BuildContainer();
+        var client = container.Resolve<HttpClient>();
+        client.Timeout.Should().Be(TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public void Csproj_DoesNotContain_MicrosoftExtensionsHttp()
+    {
+        // Amendment 2 guard: FreeBird must not depend on Microsoft.Extensions.Http
+        // or Autofac.Extensions.DependencyInjection — HttpClient is registered
+        // Autofac-natively in CoreModule.
+        var csprojPath = FindCoreCsproj();
+        var text = File.ReadAllText(csprojPath);
+        text.Should().NotContain("Microsoft.Extensions.Http");
+        text.Should().NotContain("Autofac.Extensions.DependencyInjection");
+    }
+
+    private static string FindCoreCsproj()
+    {
+        // Walk up from the test assembly's directory to find the repo root,
+        // then locate src/FreeBird.Core/FreeBird.Core.csproj.
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            var candidate = Path.Combine(dir.FullName, "src", "FreeBird.Core", "FreeBird.Core.csproj");
+            if (File.Exists(candidate)) { return candidate; }
+            dir = dir.Parent;
+        }
+        throw new FileNotFoundException("Could not locate FreeBird.Core.csproj walking up from " + AppContext.BaseDirectory);
     }
 }

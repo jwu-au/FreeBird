@@ -1,4 +1,5 @@
 using System;
+using System.Net.Http;
 using Autofac;
 using FreeBird.Core.Abstractions;
 
@@ -46,5 +47,33 @@ public sealed class CoreModule : Module
         builder.RegisterType<FreeBird.Core.Naming.NamingTemplateRenderer>()
                .As<FreeBird.Core.Abstractions.INamingTemplateRenderer>()
                .SingleInstance();
+
+        // HttpClient — Autofac-native registration (Amendment 2).
+        // We deliberately do NOT use Microsoft.Extensions.Http / IHttpClientFactory;
+        // FreeBird has exactly one HTTP consumer (NetEaseApiClient) so a single
+        // long-lived HttpClient with a pooled SocketsHttpHandler is sufficient and
+        // avoids dragging the MS.Extensions.* DI stack into a pure Autofac app.
+        //
+        // - PooledConnectionLifetime = 15min: refreshes DNS / honours connection
+        //   recycling on long-running watch sessions.
+        // - Timeout = 30s: an outer ceiling. NetEaseApiClient enforces the user's
+        //   --api-timeout per-call via CancellationToken (always shorter than this).
+        // - User-Agent: a real Safari/macOS string. NetEase's WAF blocks the default
+        //   .NET UA ("FreeBird/1.0") with 403, so we masquerade as a browser per
+        //   spec §5 Headers.
+        builder.Register(c =>
+        {
+            var handler = new SocketsHttpHandler
+            {
+                PooledConnectionLifetime = TimeSpan.FromMinutes(15)
+            };
+            var client = new HttpClient(handler)
+            {
+                Timeout = TimeSpan.FromSeconds(30)
+            };
+            client.DefaultRequestHeaders.UserAgent.ParseAdd(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15");
+            return client;
+        }).As<HttpClient>().SingleInstance();
     }
 }
