@@ -8,6 +8,7 @@ using FreeBird.Core.Abstractions;
 using FreeBird.Core.Decoding;
 using FreeBird.Core.DependencyInjection;
 using FreeBird.Core.Naming;
+using FreeBird.Core.Tagging;
 using Serilog;
 
 namespace FreeBird.Core.Tests.DependencyInjection;
@@ -40,6 +41,7 @@ public class CoreModuleTests
     [InlineData(typeof(INetEaseApiClient))]
     [InlineData(typeof(IMetadataResolver))]
     [InlineData(typeof(IMetadataOptions))]
+    [InlineData(typeof(ITagWriter))]
     public void CoreModule_ResolvesAllPublicInterfaces(Type serviceType)
     {
         using var container = BuildContainer();
@@ -234,6 +236,38 @@ public class CoreModuleTests
         options.ApiTimeoutSeconds.Should().Be(10);
         options.ApiRateLimit.Should().Be(0);
         options.WriteTags.Should().BeFalse();
+    }
+
+    // ------------------------------------------------------------------
+    // T17 — ITagWriter binding + tag-writer wiring
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void ITagWriter_ResolvesAs_CompositeTagWriter()
+    {
+        using var container = BuildContainer();
+        var writer = container.Resolve<ITagWriter>();
+        writer.GetType().Should().Be(typeof(CompositeTagWriter));
+    }
+
+    [Fact]
+    public void ITagWriter_IsSingleInstance_AcrossScopes()
+    {
+        using var container = BuildContainer();
+        using var scope1 = container.BeginLifetimeScope();
+        using var scope2 = container.BeginLifetimeScope();
+        var a = scope1.Resolve<ITagWriter>();
+        var b = scope2.Resolve<ITagWriter>();
+        a.Should().BeSameAs(b);
+    }
+
+    [Fact]
+    public void TagWriter_Backends_ResolveByInterface()
+    {
+        using var container = BuildContainer();
+        container.Resolve<IFlacTagWriter>().GetType().Should().Be(typeof(FlacTagWriter));
+        container.Resolve<IMp3TagWriter>().GetType().Should().Be(typeof(Mp3TagWriter));
+        container.Resolve<IM4aTagWriter>().GetType().Should().Be(typeof(M4aTagWriter));
     }
 
     private static string FindCoreCsproj()

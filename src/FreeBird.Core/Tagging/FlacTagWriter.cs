@@ -19,7 +19,7 @@ namespace FreeBird.Core.Tagging;
 /// <see cref="CompositeTagWriter"/> (T17) dispatches to it by file extension.
 /// Registered as a concrete <c>SingleInstance</c> via the assembly scan.
 /// </summary>
-public sealed class FlacTagWriter : IDependency
+public sealed class FlacTagWriter : IFlacTagWriter, IDependency
 {
     private const string MetaflacExe = "metaflac";
 

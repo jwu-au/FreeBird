@@ -37,7 +37,11 @@ public sealed class CoreModule : Module
                           && !t.IsInterface
                           && t.IsClass
                           && t != typeof(FreeBird.Core.Decoding.StemBasedFileNamer)
-                          && t != typeof(FreeBird.Core.Naming.MetadataAwareFileNamer))
+                          && t != typeof(FreeBird.Core.Naming.MetadataAwareFileNamer)
+                          && t != typeof(FreeBird.Core.Tagging.FlacTagWriter)
+                          && t != typeof(FreeBird.Core.Tagging.Mp3TagWriter)
+                          && t != typeof(FreeBird.Core.Tagging.M4aTagWriter)
+                          && t != typeof(FreeBird.Core.Tagging.CompositeTagWriter))
                .AsImplementedInterfaces()
                .InstancePerLifetimeScope();
 
@@ -77,6 +81,34 @@ public sealed class CoreModule : Module
         // SingleInstance: stateless / pure, matches surrounding renderer pattern.
         builder.RegisterType<FreeBird.Core.Naming.MetadataAwareFileNamer>()
                .As<IFileNamer>()
+               .SingleInstance();
+
+        // Tag writers (T16, T17) — explicit registrations.
+        //
+        // Three concrete backends + one composite. The composite is the
+        // ITagWriter binding; the backends are exposed via their internal
+        // interfaces (IFlacTagWriter / IMp3TagWriter / IM4aTagWriter) so the
+        // composite can resolve them by interface, matching the test seam.
+        //
+        // SingleInstance because all four are stateless / pure (no per-call
+        // mutable state); a single shared instance avoids per-scope allocation.
+        //
+        // The scan above is configured to skip these four types — keeping the
+        // wiring explicit here makes the ITagWriter graph easy to audit.
+        builder.RegisterType<FreeBird.Core.Tagging.FlacTagWriter>()
+               .As<FreeBird.Core.Tagging.IFlacTagWriter>()
+               .AsSelf()
+               .SingleInstance();
+        builder.RegisterType<FreeBird.Core.Tagging.Mp3TagWriter>()
+               .As<FreeBird.Core.Tagging.IMp3TagWriter>()
+               .AsSelf()
+               .SingleInstance();
+        builder.RegisterType<FreeBird.Core.Tagging.M4aTagWriter>()
+               .As<FreeBird.Core.Tagging.IM4aTagWriter>()
+               .AsSelf()
+               .SingleInstance();
+        builder.RegisterType<FreeBird.Core.Tagging.CompositeTagWriter>()
+               .As<ITagWriter>()
                .SingleInstance();
 
         // HttpClient — Autofac-native registration (Amendment 2).
