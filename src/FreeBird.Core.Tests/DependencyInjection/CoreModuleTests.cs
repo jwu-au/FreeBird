@@ -270,6 +270,16 @@ public class CoreModuleTests
         container.Resolve<IM4aTagWriter>().GetType().Should().Be(typeof(M4aTagWriter));
     }
 
+    [Fact]
+    public void ResolutionMarkerSerializer_Resolves_AsSingleInstance()
+    {
+        using var container = BuildContainer();
+        var a = container.Resolve<FreeBird.Core.Processing.ResolutionMarkerSerializer>();
+        var b = container.Resolve<FreeBird.Core.Processing.ResolutionMarkerSerializer>();
+        Assert.NotNull(a);
+        Assert.Same(a, b);
+    }
+
     private static string FindCoreCsproj()
     {
         // Walk up from the test assembly's directory to find the repo root,

@@ -66,6 +66,15 @@ public sealed class CoreModule : Module
                .As<FreeBird.Core.Abstractions.INamingTemplateRenderer>()
                .SingleInstance();
 
+        // ResolutionMarkerSerializer (v3.0.1 T03): writer/reader for per-source
+        // resolution markers under "<outputDir>/.freebird-resolved/". Stateless
+        // (the logger is the only field). SingleInstance matches the surrounding
+        // pattern for stateless processing helpers; the type does NOT implement
+        // IDependency, so this explicit registration is required.
+        builder.RegisterType<FreeBird.Core.Processing.ResolutionMarkerSerializer>()
+               .AsSelf()
+               .SingleInstance();
+
         // DefaultMetadataOptions (T13): spec-default IMetadataOptions so the container
         // graph can resolve at startup. Per-run options (ScanOptions/WatchOptions) flow
         // through orchestrator method parameters (FileProcessor.ProcessAsync in T14),
