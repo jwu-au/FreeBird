@@ -27,6 +27,7 @@ public sealed class FileProcessor : IFileProcessor
     private readonly ICompositeIntegrityChecker _integrity;
     private readonly IAtomicFileWriter _writer;
     private readonly IMetadataResolver _metadata;
+    private readonly ITagWriter _tagWriter;
     private readonly ILogger _logger;
 
     public FileProcessor(
@@ -36,6 +37,7 @@ public sealed class FileProcessor : IFileProcessor
         ICompositeIntegrityChecker integrity,
         IAtomicFileWriter writer,
         IMetadataResolver metadata,
+        ITagWriter tagWriter,
         ILogger logger)
     {
         _decoder = decoder ?? throw new ArgumentNullException(nameof(decoder));
@@ -44,6 +46,7 @@ public sealed class FileProcessor : IFileProcessor
         _integrity = integrity ?? throw new ArgumentNullException(nameof(integrity));
         _writer = writer ?? throw new ArgumentNullException(nameof(writer));
         _metadata = metadata ?? throw new ArgumentNullException(nameof(metadata));
+        _tagWriter = tagWriter ?? throw new ArgumentNullException(nameof(tagWriter));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -171,21 +174,73 @@ public sealed class FileProcessor : IFileProcessor
             Directory.CreateDirectory(options.OutputDirectory);
             File.Move(stagingPath, finalPath, overwrite: options.OnCollision == CollisionPolicy.Overwrite);
 
-            // Step 9.5 (v3 T14): emit the v3 OK-path sidecar for non-offline metadata fallback.
-            // Spec §10 special case: "offline-mode" never gets a sidecar — the user opted out
-            // of metadata explicitly, so the fallback naming is by design, not a failure.
-            // Sidecar content uses the same 7-field format as the v2 quarantine sidecar for
-            // consistency. The OK-path sidecar lives next to the SUCCESSFULLY decoded output
-            // (in OutputDirectory), not in the .freebird-failed quarantine directory.
+            // Step 9.5 (v3 T18): optional post-rename tag-write.
+            //   * Only fires when WriteTags=true AND metadata resolved successfully.
+            //   * Failure is captured as a sidecar reason but NEVER deletes/rolls-back
+            //     the decoded audio file — the user's primary artifact is preserved.
+            //   * Catch-all Exception is intentional: ITagWriter is a long-tail of
+            //     possible failure modes (missing tool, corrupt file, locking, etc.)
+            //     and the contract is "never lose decoded audio".
+            string? tagFailReason = null;
+            if (options.WriteTags && song is not null)
+            {
+                try
+                {
+                    var tagResult = await _tagWriter
+                        .WriteAsync(finalPath, format, song, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (tagResult is TagWriteResult.Failed failed)
+                    {
+                        tagFailReason = failed.SidecarReason;
+                        _logger.Warning(
+                            "Tag write failed for {Path}: {Reason}",
+                            finalPath, failed.SidecarReason);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    tagFailReason = "tag-write-failed";
+                    _logger.Warning(ex, "Unexpected tag-write error for {Path}", finalPath);
+                }
+            }
+
+            // Step 9.6 (v3 T14 + T18): emit the v3 OK-path sidecar.
+            // Two distinct sidecar sources may apply:
+            //   (a) Metadata fallback (Fallback with reason != "offline-mode") — from T14.
+            //   (b) Tag-write failure (only possible when metadata SUCCEEDED) — from T18.
+            // These cases are MUTUALLY EXCLUSIVE: tag-write is only attempted on
+            // MetadataResolution.Success, which precludes the Fallback branch. The
+            // explicit `else if` documents that invariant.
+            //
+            // Spec §10 special case: "offline-mode" never gets a sidecar — the user
+            // opted out of metadata explicitly, so fallback naming is by design.
+            // Sidecar content uses the same 7-field format as the v2 quarantine
+            // sidecar for consistency. The OK-path sidecar lives next to the
+            // SUCCESSFULLY decoded output (in OutputDirectory), not in the
+            // .freebird-failed quarantine directory.
+            string? sidecarReason = null;
             if (resolution is MetadataResolution.Fallback fb && fb.SidecarReason != "offline-mode")
+            {
+                sidecarReason = fb.SidecarReason;
+            }
+            else if (tagFailReason is not null)
+            {
+                sidecarReason = tagFailReason;
+            }
+
+            if (sidecarReason is not null)
             {
                 var sidecarPath = finalPath + ".txt";
                 var sidecarContent = BuildSidecarContent(
-                    sourcePath, format, integrity.LevelApplied, fb.SidecarReason, _logger);
+                    sourcePath, format, integrity.LevelApplied, sidecarReason, _logger);
                 File.WriteAllText(sidecarPath, sidecarContent);
                 _logger.Debug(
-                    "Wrote v3 metadata-fallback sidecar: {Path} (reason={Reason})",
-                    sidecarPath, fb.SidecarReason);
+                    "Wrote v3 OK-path sidecar: {Path} (reason={Reason})",
+                    sidecarPath, sidecarReason);
             }
 
             return new ScanResult(
