@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FreeBird.Cli;
+using FreeBird.Cli.Tests;
 using FreeBird.Cli.Tests.E2E;
 
 namespace FreeBird.Cli.Tests.E2E;
@@ -25,6 +26,9 @@ public class InitialSweepE2ETests : IDisposable
     private readonly string _tempDir;
     private readonly string _inputDir;
     private readonly string _outputDir;
+    // T13: stem-based output names ("alpha.mp3", "bravo.mp3", "charlie.mp3") —
+    // pin StemBasedFileNamer instead of v3 default MetadataAwareFileNamer.
+    private readonly StemNamerTestOverride _namerOverride = new();
 
     public InitialSweepE2ETests()
     {
@@ -35,7 +39,11 @@ public class InitialSweepE2ETests : IDisposable
         Directory.CreateDirectory(_outputDir);
     }
 
-    public void Dispose() => WatchE2EHelpers.CleanupDir(_tempDir);
+    public void Dispose()
+    {
+        _namerOverride.Dispose();
+        WatchE2EHelpers.CleanupDir(_tempDir);
+    }
 
     [Fact]
     [Trait("Category", "E2E")]

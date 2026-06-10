@@ -2,6 +2,7 @@ using System;
 using System.Net.Http;
 using Autofac;
 using FreeBird.Core.Abstractions;
+using FreeBird.Core.Models;
 
 namespace FreeBird.Core.DependencyInjection;
 
@@ -19,11 +20,24 @@ public sealed class CoreModule : Module
 {
     protected override void Load(ContainerBuilder builder)
     {
+        // Assembly-scan all concrete IDependency implementations.
+        //
+        // EXCLUSION (T13): Both IFileNamer implementations are excluded from the scan
+        // and registered explicitly below. Rationale:
+        //   - StemBasedFileNamer (v1/v2 IFileNamer) stays in the codebase for direct
+        //     instantiation (its GetStem helper is used by quarantine/skip deciders,
+        //     and tests construct it via `new StemBasedFileNamer()`), but is NOT
+        //     DI-bound in v3.
+        //   - MetadataAwareFileNamer (v3 IFileNamer) is registered explicitly so the
+        //     binding intent is obvious and so we don't get a duplicate registration
+        //     from the scan layered under the explicit one.
         builder.RegisterAssemblyTypes(typeof(CoreModule).Assembly)
                .Where(t => typeof(IDependency).IsAssignableFrom(t)
                           && !t.IsAbstract
                           && !t.IsInterface
-                          && t.IsClass)
+                          && t.IsClass
+                          && t != typeof(FreeBird.Core.Decoding.StemBasedFileNamer)
+                          && t != typeof(FreeBird.Core.Naming.MetadataAwareFileNamer))
                .AsImplementedInterfaces()
                .InstancePerLifetimeScope();
 
@@ -46,6 +60,23 @@ public sealed class CoreModule : Module
         // Last-registration-wins overrides the bulk InstancePerLifetimeScope above.
         builder.RegisterType<FreeBird.Core.Naming.NamingTemplateRenderer>()
                .As<FreeBird.Core.Abstractions.INamingTemplateRenderer>()
+               .SingleInstance();
+
+        // DefaultMetadataOptions (T13): spec-default IMetadataOptions so the container
+        // graph can resolve at startup. Per-run options (ScanOptions/WatchOptions) flow
+        // through orchestrator method parameters (FileProcessor.ProcessAsync in T14),
+        // NOT the container. This default exists only so MetadataAwareFileNamer's
+        // ctor dependency on IMetadataOptions is satisfied at compose time.
+        builder.RegisterType<DefaultMetadataOptions>()
+               .As<IMetadataOptions>()
+               .SingleInstance();
+
+        // MetadataAwareFileNamer (T13): v3 IFileNamer. Composes INamingTemplateRenderer
+        // + FilenameSanitizer + extension. Explicit registration with last-wins
+        // semantics overrides any IFileNamer the assembly-scan picked up.
+        // SingleInstance: stateless / pure, matches surrounding renderer pattern.
+        builder.RegisterType<FreeBird.Core.Naming.MetadataAwareFileNamer>()
+               .As<IFileNamer>()
                .SingleInstance();
 
         // HttpClient — Autofac-native registration (Amendment 2).

@@ -6,9 +6,14 @@ using FreeBird.Core.Models;
 namespace FreeBird.Core.Decoding;
 
 /// <summary>
-/// Default file namer: strip .uc/.uc! suffix from source basename, append detected format extension.
+/// v1/v2 file namer: strip .uc/.uc! suffix from source basename, append detected format extension.
 /// Ignores the <c>metadata</c> parameter — v1/v2 stem-based behavior is preserved exactly.
-/// TODO T13: replaced by MetadataAwareFileNamer (see freebird-v3-metadata-naming plan).
+///
+/// T13 (v3) note: this type is no longer DI-bound as <see cref="IFileNamer"/> — the v3 default
+/// is <see cref="FreeBird.Core.Naming.MetadataAwareFileNamer"/>. StemBasedFileNamer is retained
+/// because its <see cref="GetStem"/> helper is still used by other components (quarantine,
+/// FilesystemSkipDecider) and because legacy E2E tests instantiate it directly when they
+/// need stem-based output filenames (see <c>StemNamerTestOverride</c>).
 /// </summary>
 public sealed class StemBasedFileNamer : IFileNamer
 {

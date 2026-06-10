@@ -17,6 +17,9 @@ public class ScanRunnerEndToEndTests : IDisposable
     private readonly string _tempDir;
     private readonly string _inputDir;
     private readonly string _outputDir;
+    // T13: v1/v2 stem-based outputs (e.g. "42-song.mp3") — pin StemBasedFileNamer
+    // as the IFileNamer instead of the v3 default MetadataAwareFileNamer.
+    private readonly StemNamerTestOverride _namerOverride = new();
 
     public ScanRunnerEndToEndTests()
     {
@@ -29,6 +32,7 @@ public class ScanRunnerEndToEndTests : IDisposable
 
     public void Dispose()
     {
+        _namerOverride.Dispose();
         try { Directory.Delete(_tempDir, recursive: true); } catch { }
     }
 

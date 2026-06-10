@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FreeBird.Cli;
+using FreeBird.Cli.Tests;
 using FreeBird.Cli.Tests.E2E;
 
 namespace FreeBird.Cli.Tests.E2E;
@@ -29,6 +30,8 @@ public class CleanupUxE2ETests : IDisposable
     private readonly string _tempDir;
     private readonly string _inputDir;
     private readonly string _outputDir;
+    // T13: stem-based output name ("song.mp3") — pin StemBasedFileNamer.
+    private readonly StemNamerTestOverride _namerOverride = new();
 
     public CleanupUxE2ETests()
     {
@@ -39,7 +42,11 @@ public class CleanupUxE2ETests : IDisposable
         Directory.CreateDirectory(_outputDir);
     }
 
-    public void Dispose() => WatchE2EHelpers.CleanupDir(_tempDir);
+    public void Dispose()
+    {
+        _namerOverride.Dispose();
+        WatchE2EHelpers.CleanupDir(_tempDir);
+    }
 
     [Fact]
     [Trait("Category", "E2E")]

@@ -5,7 +5,9 @@ using System.Net.Http;
 using Autofac;
 using FluentAssertions;
 using FreeBird.Core.Abstractions;
+using FreeBird.Core.Decoding;
 using FreeBird.Core.DependencyInjection;
+using FreeBird.Core.Naming;
 using Serilog;
 
 namespace FreeBird.Core.Tests.DependencyInjection;
@@ -37,6 +39,7 @@ public class CoreModuleTests
     [InlineData(typeof(INamingTemplateRenderer))]
     [InlineData(typeof(INetEaseApiClient))]
     [InlineData(typeof(IMetadataResolver))]
+    [InlineData(typeof(IMetadataOptions))]
     public void CoreModule_ResolvesAllPublicInterfaces(Type serviceType)
     {
         using var container = BuildContainer();
@@ -184,6 +187,53 @@ public class CoreModuleTests
         var text = File.ReadAllText(csprojPath);
         text.Should().NotContain("Microsoft.Extensions.Http");
         text.Should().NotContain("Autofac.Extensions.DependencyInjection");
+    }
+
+    // ------------------------------------------------------------------
+    // T13 — DI swap: IFileNamer → MetadataAwareFileNamer
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void IFileNamer_ResolvesAs_MetadataAwareFileNamer()
+    {
+        using var container = BuildContainer();
+        var namer = container.Resolve<IFileNamer>();
+        namer.GetType().Should().Be(typeof(MetadataAwareFileNamer));
+    }
+
+    [Fact]
+    public void StemBasedFileNamer_NoLongerBound()
+    {
+        // StemBasedFileNamer remains in the codebase for direct instantiation
+        // (v1/v2-style tests `new StemBasedFileNamer()`), but is excluded from
+        // the assembly-scan in CoreModule so it is no longer DI-resolvable —
+        // neither as itself nor as the resolved IFileNamer.
+        using var container = BuildContainer();
+        container.IsRegistered<StemBasedFileNamer>().Should().BeFalse();
+        var namer = container.Resolve<IFileNamer>();
+        namer.Should().NotBeOfType<StemBasedFileNamer>();
+
+        // Also assert the implementation list for IFileNamer contains exactly one
+        // type and it isn't StemBasedFileNamer — defense against future scan changes.
+        var allFileNamers = container.Resolve<System.Collections.Generic.IEnumerable<IFileNamer>>().ToList();
+        allFileNamers.Should().ContainSingle();
+        allFileNamers.Should().NotContain(n => n.GetType() == typeof(StemBasedFileNamer));
+    }
+
+    [Fact]
+    public void IMetadataOptions_Resolves_AsDefault()
+    {
+        // CoreModule registers a DefaultMetadataOptions so MetadataAwareFileNamer's
+        // ctor graph can resolve at container build time. Per-run options flow
+        // via method parameters (FileProcessor.ProcessAsync), not the container.
+        using var container = BuildContainer();
+        var options = container.Resolve<IMetadataOptions>();
+        options.Should().NotBeNull();
+        options.NamingTemplate.Should().Be("{artist} - {title}");
+        options.Offline.Should().BeFalse();
+        options.ApiTimeoutSeconds.Should().Be(10);
+        options.ApiRateLimit.Should().Be(0);
+        options.WriteTags.Should().BeFalse();
     }
 
     private static string FindCoreCsproj()

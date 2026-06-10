@@ -22,6 +22,17 @@ public static class ScanRunner
     public const int ExitBadArgs = 2;
     public const int ExitCancelled = 130;
 
+    /// <summary>
+    /// Test-only hook (v3 T13): if non-null, invoked against the Autofac
+    /// <see cref="ContainerBuilder"/> after <c>CoreModule</c> + the logger instance have
+    /// been registered but before <c>Build()</c>. Mirrors the same affordance on
+    /// <c>WatchRunner.AdditionalContainerSetup</c>. Used by v1/v2 E2E tests to override
+    /// <c>IFileNamer</c> back to <c>StemBasedFileNamer</c> when stem-based filenames
+    /// (e.g. <c>42-song.mp3</c>) are required — the v3 default <c>MetadataAwareFileNamer</c>
+    /// produces <c>{musicId}.{ext}</c> names that those legacy tests do not expect.
+    /// </summary>
+    public static Action<ContainerBuilder>? AdditionalContainerSetup { get; set; }
+
     public static async Task<int> RunAsync(
         string inputDir,
         string outputDir,
@@ -143,6 +154,9 @@ public static class ScanRunner
         var builder = new ContainerBuilder();
         builder.RegisterModule<CoreModule>();
         builder.RegisterInstance(logger).As<ILogger>().SingleInstance();
+        // T13 test hook (mirrors WatchRunner): let tests override individual registrations
+        // after the default wiring is in place. Autofac last-registration-wins.
+        AdditionalContainerSetup?.Invoke(builder);
         return builder.Build();
     }
 }

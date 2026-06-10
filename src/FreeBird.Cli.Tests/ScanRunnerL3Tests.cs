@@ -20,6 +20,9 @@ public class ScanRunnerL3Tests : IDisposable
     private readonly string _inputDir;
     private readonly string _outputDir;
     private static readonly bool FlacAvailable = ProbeFlacOnce();
+    // T13: stem-based output names ("good.flac", "auto-flac.flac", "corrupt.*") —
+    // pin StemBasedFileNamer instead of the v3 default MetadataAwareFileNamer.
+    private readonly StemNamerTestOverride _namerOverride = new();
 
     public ScanRunnerL3Tests()
     {
@@ -32,6 +35,7 @@ public class ScanRunnerL3Tests : IDisposable
 
     public void Dispose()
     {
+        _namerOverride.Dispose();
         try { Directory.Delete(_tempDir, recursive: true); } catch { }
     }
 
