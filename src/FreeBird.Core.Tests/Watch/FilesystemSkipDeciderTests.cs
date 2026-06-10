@@ -1,12 +1,16 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text;
 using FluentAssertions;
 using FreeBird.Core.Abstractions;
 using FreeBird.Core.Models;
+using FreeBird.Core.Processing;
 using FreeBird.Core.Sidecar;
 using FreeBird.Core.Watch;
 using Moq;
 using Serilog;
+using Serilog.Core;
+using Serilog.Events;
 
 namespace FreeBird.Core.Tests.Watch;
 
@@ -62,11 +66,14 @@ public sealed class FilesystemSkipDeciderTests : IDisposable
 
     private static ILogger NullLogger() => new Mock<ILogger>().Object;
 
+    private static ResolutionMarkerSerializer NewMarkerSerializer()
+        => new(NullLogger());
+
     private static FilesystemSkipDecider WithRealReader()
-        => new(new TextSidecarReader(), NullLogger());
+        => new(new TextSidecarReader(), NewMarkerSerializer(), NullLogger());
 
     private static FilesystemSkipDecider WithMockReader(Mock<ISidecarReader> mock)
-        => new(mock.Object, NullLogger());
+        => new(mock.Object, NewMarkerSerializer(), NullLogger());
 
     private static string WriteV2Sidecar(
         string failedDir,
@@ -369,14 +376,21 @@ public sealed class FilesystemSkipDeciderTests : IDisposable
     [Fact]
     public void Constructor_NullSidecarReader_Throws()
     {
-        ((Action)(() => _ = new FilesystemSkipDecider(null!, NullLogger())))
+        ((Action)(() => _ = new FilesystemSkipDecider(null!, NewMarkerSerializer(), NullLogger())))
+            .Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void Constructor_NullMarkerSerializer_Throws()
+    {
+        ((Action)(() => _ = new FilesystemSkipDecider(new TextSidecarReader(), null!, NullLogger())))
             .Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
     public void Constructor_NullLogger_Throws()
     {
-        ((Action)(() => _ = new FilesystemSkipDecider(new TextSidecarReader(), null!)))
+        ((Action)(() => _ = new FilesystemSkipDecider(new TextSidecarReader(), NewMarkerSerializer(), null!)))
             .Should().Throw<ArgumentNullException>();
     }
 
@@ -423,7 +437,7 @@ public sealed class FilesystemSkipDeciderTests : IDisposable
         var loggerMock = new Mock<ILogger>();
         loggerMock.Setup(l => l.Information(It.IsAny<string>(), It.IsAny<object?[]>()))
                   .Callback<string, object?[]>((tpl, _) => logged.Add(tpl));
-        var sut = new FilesystemSkipDecider(new TextSidecarReader(), loggerMock.Object);
+        var sut = new FilesystemSkipDecider(new TextSidecarReader(), NewMarkerSerializer(), loggerMock.Object);
 
         var decision = await sut.DecideAsync(src, opts);
 
@@ -471,5 +485,91 @@ public sealed class FilesystemSkipDeciderTests : IDisposable
         var decision = await sut.DecideAsync(src, opts);
 
         decision.ShouldProcess.Should().BeTrue();
+    }
+
+    // -----------------------------------------------------------------------
+    // v3.0.1 T05 — Branch 3b: per-source-stem JSON marker short-circuit.
+    //
+    // Comprehensive coverage of all stale/retry/template/missing-output branches
+    // lives in T06. This single happy-path test proves the end-to-end wiring:
+    // a fresh marker yields Skip(AlreadyDecodedViaMarker) and emits exactly one
+    // DBG "marker hit" line with zero INF noise.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task Decide_MarkerPresentAndFresh_ReturnsSkipAlreadyDecodedViaMarker_AndLogsDbg()
+    {
+        var root = NewTempDir();
+        // Use a composite stem that wouldn't match Branch 3a (the stem itself isn't
+        // the output filename) so Branch 3b is the branch under test.
+        var src = CreateSource(root, "3367798042-_-_5999.uc", 4096);
+        var info = new FileInfo(src);
+        var mtime = new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero);
+
+        var opts = OptionsFor(root);
+
+        // Pre-seed the output that the marker references (belt-and-suspenders check).
+        const string outputName = "Alice - SongOne.flac";
+        File.WriteAllBytes(Path.Combine(root, "out", outputName), new byte[] { 1, 2, 3 });
+
+        // Build a fully-fresh Resolved marker matching the source AND template.
+        var marker = new ResolutionMarker
+        {
+            Schema = 1,
+            SourceStem = "3367798042-_-_5999",
+            MusicId = "3367798042",
+            SourcePath = src,
+            SourceSize = info.Length,
+            SourceMtime = mtime,
+            ResolvedAt = DateTimeOffset.UtcNow,
+            Status = MarkerStatus.Resolved,
+            OutputName = outputName,
+            Format = "Flac",
+            Integrity = "L3",
+            NamingTemplate = opts.NamingTemplate,
+            Reason = null,
+            RetryAfter = null,
+        };
+
+        // Write via the REAL serializer to exercise the full round-trip on disk.
+        var writerLogger = new LoggerConfiguration().MinimumLevel.Verbose().CreateLogger();
+        var writerSerializer = new ResolutionMarkerSerializer(writerLogger);
+        writerSerializer.WriteAtomic(opts.OutputDir, marker);
+
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(opts.OutputDir, marker.SourceStem);
+        File.Exists(markerPath).Should().BeTrue("the test seeds a fresh marker");
+
+        // Capture decider logs via an InMemorySink.
+        var sink = new InMemorySink();
+        var deciderLogger = new LoggerConfiguration()
+            .MinimumLevel.Verbose()
+            .WriteTo.Sink(sink)
+            .CreateLogger();
+        var readerSerializer = new ResolutionMarkerSerializer(deciderLogger);
+        var sut = new FilesystemSkipDecider(new TextSidecarReader(), readerSerializer, deciderLogger);
+
+        var decision = await sut.DecideAsync(src, opts);
+
+        decision.ShouldProcess.Should().BeFalse();
+        decision.Reason.Should().Be(SkipReason.AlreadyDecodedViaMarker);
+        decision.Detail.Should().Be(markerPath);
+
+        // Exactly one "marker hit" DBG line, zero INF lines (proves the demotion +
+        // proves we never logged a freshness/stale message on the happy path).
+        var markerHitLines = sink.Events
+            .Where(e => e.RenderMessage().Contains("marker hit", StringComparison.Ordinal))
+            .ToList();
+        markerHitLines.Should().HaveCount(1);
+        markerHitLines[0].Level.Should().Be(LogEventLevel.Debug);
+
+        sink.Events.Where(e => e.Level == LogEventLevel.Information).Should().BeEmpty();
+    }
+
+    /// <summary>Tiny in-memory Serilog sink for assertions on log output.</summary>
+    private sealed class InMemorySink : ILogEventSink
+    {
+        private readonly ConcurrentQueue<LogEvent> _events = new();
+        public IReadOnlyList<LogEvent> Events => _events.ToArray();
+        public void Emit(LogEvent logEvent) => _events.Enqueue(logEvent);
     }
 }
