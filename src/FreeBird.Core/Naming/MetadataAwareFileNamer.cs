@@ -1,7 +1,6 @@
 using System;
 using System.Globalization;
 using FreeBird.Core.Abstractions;
-using FreeBird.Core.Decoding;
 using FreeBird.Core.Metadata;
 using FreeBird.Core.Models;
 
@@ -48,7 +47,8 @@ public sealed class MetadataAwareFileNamer : IFileNamer
         // Extract musicId from the .uc/.uc! stem. The stem is either:
         //   - A bare numeric id (most common: "3367798042.uc")
         //   - A composite cache name like "3367798042-_-_5999-_-_xxx.uc" — take leading digits.
-        var musicId = ExtractMusicId(sourcePath);
+        // MusicIdExtractor returns 0L on failure; that's still a deterministic fallback name.
+        MusicIdExtractor.TryExtract(sourcePath, out var musicId);
 
         // Fallback path: spec §10 mandates {musicId}.{ext} regardless of template.
         if (metadata is null)
@@ -64,35 +64,6 @@ public sealed class MetadataAwareFileNamer : IFileNamer
         var rendered = _renderer.Render(template, metadata, musicId);
         var sanitized = FilenameSanitizer.Sanitize(rendered);
         return sanitized + ext;
-    }
-
-    /// <summary>
-    /// Extract the leading numeric musicId from the .uc/.uc! stem. Returns 0 when
-    /// the stem has no leading digits (caller treats this as a degenerate but
-    /// deterministic fallback name).
-    /// </summary>
-    private static long ExtractMusicId(string sourcePath)
-    {
-        var stem = StemBasedFileNamer.GetStem(sourcePath);
-
-        // Try whole-stem first (the canonical cache name form).
-        if (long.TryParse(stem, NumberStyles.None, CultureInfo.InvariantCulture, out var id))
-        {
-            return id;
-        }
-
-        // Composite stem: take leading digit run, e.g. "3367798042-_-_5999-_-_xxx".
-        int i = 0;
-        while (i < stem.Length && stem[i] >= '0' && stem[i] <= '9')
-        {
-            i++;
-        }
-        if (i > 0 && long.TryParse(stem.AsSpan(0, i), NumberStyles.None, CultureInfo.InvariantCulture, out var leading))
-        {
-            return leading;
-        }
-
-        return 0L;
     }
 
     private static string GetExtension(AudioFormat format) => format switch

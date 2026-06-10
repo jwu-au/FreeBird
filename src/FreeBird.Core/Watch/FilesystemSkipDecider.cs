@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using FreeBird.Core.Abstractions;
 using FreeBird.Core.Decoding;
 using FreeBird.Core.Models;
+using FreeBird.Core.Naming;
 using Serilog;
 
 namespace FreeBird.Core.Watch;
@@ -91,7 +92,7 @@ public sealed class FilesystemSkipDecider : ISkipDecider
         //   - When --offline=false, an existing {musicId}.{ext} usually means a PRIOR
         //     run failed metadata. The current run may now succeed (different output
         //     filename). We bias toward Process and log the edge case.
-        var musicIdStem = ExtractLeadingMusicId(stem);
+        var musicIdStem = MusicIdExtractor.TryExtractAsString(sourcePath);
         foreach (var ext in OutputExtensions)
         {
             // Legacy v2 / stem-equals-output match (still the primary signal for
@@ -191,21 +192,4 @@ public sealed class FilesystemSkipDecider : ISkipDecider
         return SkipDecision.Process();
     }
 
-    /// <summary>
-    /// Extract the leading-digit musicId from a .uc/.uc! stem, matching
-    /// <see cref="Naming.MetadataAwareFileNamer"/>'s fallback rule so that the skip
-    /// decider and the namer agree on what <c>{musicId}.{ext}</c> means. Returns
-    /// <c>null</c> when no leading digits are present (degenerate case; skip decider
-    /// cannot predict a musicId-fallback name and falls through to Process).
-    /// </summary>
-    private static string? ExtractLeadingMusicId(string stem)
-    {
-        if (string.IsNullOrEmpty(stem)) { return null; }
-        int i = 0;
-        while (i < stem.Length && stem[i] >= '0' && stem[i] <= '9')
-        {
-            i++;
-        }
-        return i > 0 ? stem.Substring(0, i) : null;
-    }
 }

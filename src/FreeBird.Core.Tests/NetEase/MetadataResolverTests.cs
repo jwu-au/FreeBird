@@ -159,4 +159,48 @@ public class MetadataResolverTests
             x => x.GetSongDetailAsync(It.IsAny<long>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
+
+    // ------------------------------------------------------------------
+    // v3.0.0 hotfix regression: real NetEase Mac cache files use composite
+    // stems like "<musicId>-_-_<bitrate>-_-_<hash>.uc!". The resolver used
+    // to bail to Fallback("metadata-empty") for any non-bare-numeric stem,
+    // which meant --naming-template and --write-tags silently did nothing
+    // on the user's actual cache. These tests pin the fix in place.
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public async Task ResolveAsync_CompositeStem_CallsApiInsteadOfBailing()
+    {
+        var song = SampleSong();
+        var apiMock = new Mock<INetEaseApiClient>();
+        apiMock
+            .Setup(c => c.GetSongDetailAsync(3367798042L, It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new NetEaseApiResult.Success(song));
+        var (resolver, _) = ResolverWith(apiMock.Object);
+        var opts = new ScanOptions("in", "out"); // online
+
+        var path = "/cache/3367798042-_-_5999-_-_a38658b6e504b7520bb4c507db13b9d2.uc!";
+        var result = await resolver.ResolveAsync(path, opts, CancellationToken.None);
+
+        apiMock.Verify(
+            c => c.GetSongDetailAsync(3367798042L, It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+        result.Should().BeOfType<MetadataResolution.Success>()
+              .Which.Song.Should().BeSameAs(song);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_NonNumericStem_StillBailsAsFallback()
+    {
+        // MockBehavior.Strict ensures the API is NOT called for unparseable stems.
+        var apiMock = new Mock<INetEaseApiClient>(MockBehavior.Strict);
+        var (resolver, _) = ResolverWith(apiMock.Object);
+        var opts = new ScanOptions("in", "out"); // online
+
+        var path = "/cache/nodigits.uc";
+        var result = await resolver.ResolveAsync(path, opts, CancellationToken.None);
+
+        result.Should().BeOfType<MetadataResolution.Fallback>()
+              .Which.SidecarReason.Should().Be("metadata-empty");
+    }
 }

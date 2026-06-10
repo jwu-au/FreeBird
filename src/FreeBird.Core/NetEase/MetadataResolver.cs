@@ -1,10 +1,9 @@
 using System;
-using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 using FreeBird.Core.Abstractions;
-using FreeBird.Core.Decoding;
 using FreeBird.Core.Metadata;
+using FreeBird.Core.Naming;
 using Serilog;
 
 namespace FreeBird.Core.NetEase;
@@ -39,10 +38,9 @@ public sealed class MetadataResolver : IMetadataResolver
             return new MetadataResolution.Fallback("offline-mode");
         }
 
-        var stem = StemBasedFileNamer.GetStem(sourcePath);
-        if (!long.TryParse(stem, NumberStyles.None, CultureInfo.InvariantCulture, out var musicId))
+        if (!MusicIdExtractor.TryExtract(sourcePath, out var musicId))
         {
-            _log.Warning("Cannot extract musicId from filename stem {Stem} for {Path}; falling back", stem, sourcePath);
+            _log.Warning("Cannot extract musicId from source path {Path}; falling back", sourcePath);
             return new MetadataResolution.Fallback("metadata-empty");
         }
 
