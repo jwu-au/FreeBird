@@ -16,6 +16,9 @@ public enum SkipReason
 
     /// <summary>Completion detector reports the file is still being written.</summary>
     NotYetStable = 3,
+
+    /// <summary>Output exists and the per-source-stem resolution marker confirms its provenance.</summary>
+    AlreadyDecodedViaMarker = 4,
 }
 
 /// <summary>
