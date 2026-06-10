@@ -73,7 +73,7 @@ public sealed class FilesystemSkipDecider : ISkipDecider
             return decision;
         }
 
-        var stem = StemPlusExtensionNamingStrategy.GetStem(sourcePath);
+        var stem = StemBasedFileNamer.GetStem(sourcePath);
 
         // 3. AlreadyDecoded — first existing successful output wins.
         foreach (var ext in OutputExtensions)

@@ -28,7 +28,7 @@ public class InterfaceContractTests
         {
             "IXorDecoder",
             "IFormatSniffer",
-            "INamingStrategy",
+            "IFileNamer",
             "IIntegrityChecker",
             "IL1IntegrityChecker",
             "IL3IntegrityChecker",

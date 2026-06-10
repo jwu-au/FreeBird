@@ -23,7 +23,7 @@ public class CoreModuleTests
     [Theory]
     [InlineData(typeof(IXorDecoder))]
     [InlineData(typeof(IFormatSniffer))]
-    [InlineData(typeof(INamingStrategy))]
+    [InlineData(typeof(IFileNamer))]
     [InlineData(typeof(IProcessRunner))]
     [InlineData(typeof(IAtomicFileWriter))]
     [InlineData(typeof(IL1IntegrityChecker))]

@@ -22,7 +22,7 @@ public sealed class FileProcessor : IFileProcessor
 
     private readonly IXorDecoder _decoder;
     private readonly IFormatSniffer _sniffer;
-    private readonly INamingStrategy _naming;
+    private readonly IFileNamer _naming;
     private readonly ICompositeIntegrityChecker _integrity;
     private readonly IAtomicFileWriter _writer;
     private readonly ILogger _logger;
@@ -30,7 +30,7 @@ public sealed class FileProcessor : IFileProcessor
     public FileProcessor(
         IXorDecoder decoder,
         IFormatSniffer sniffer,
-        INamingStrategy naming,
+        IFileNamer naming,
         ICompositeIntegrityChecker integrity,
         IAtomicFileWriter writer,
         ILogger logger)
@@ -98,7 +98,7 @@ public sealed class FileProcessor : IFileProcessor
             {
                 // Use the naming strategy's stem extractor for consistency with the OK-path naming
                 // (cross-runtime safe; .NET 10 + Mono variants handle .uc! differently in Path.GetFileNameWithoutExtension).
-                var sourceStem = StemPlusExtensionNamingStrategy.GetStem(sourcePath);
+                var sourceStem = StemBasedFileNamer.GetStem(sourcePath);
                 var quarantinedPath = QuarantineFile(
                     stagingPath, failedDir, $"{sourceStem}.bin",
                     sourcePath, AudioFormat.Unknown, levelApplied: null, reason: "Unknown format");
@@ -124,7 +124,7 @@ public sealed class FileProcessor : IFileProcessor
             // Step 6: integrity failed -> quarantine
             if (!integrity.Ok)
             {
-                var outputName = _naming.GetOutputFileName(sourcePath, format);
+                var outputName = _naming.GetTargetName(sourcePath, format, metadata: null);
                 var quarantinedPath = QuarantineFile(
                     stagingPath, failedDir, outputName,
                     sourcePath, format, integrity.LevelApplied, integrity.Reason ?? "Integrity failed");
@@ -138,7 +138,7 @@ public sealed class FileProcessor : IFileProcessor
             }
 
             // Step 7: compute final path
-            var finalName = _naming.GetOutputFileName(sourcePath, format);
+            var finalName = _naming.GetTargetName(sourcePath, format, metadata: null);
             var finalPath = Path.Combine(options.OutputDirectory, finalName);
 
             // Step 8: collision check

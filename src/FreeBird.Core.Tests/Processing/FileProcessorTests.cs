@@ -41,13 +41,13 @@ public class FileProcessorTests : IDisposable
     private (FileProcessor sut,
              Mock<IXorDecoder> decoder,
              Mock<IFormatSniffer> sniffer,
-             Mock<INamingStrategy> naming,
+             Mock<IFileNamer> naming,
              Mock<ICompositeIntegrityChecker> integrity,
              Mock<IAtomicFileWriter> writer) MakeMockedSut()
     {
         var decoder = new Mock<IXorDecoder>();
         var sniffer = new Mock<IFormatSniffer>();
-        var naming = new Mock<INamingStrategy>();
+        var naming = new Mock<IFileNamer>();
         var integrity = new Mock<ICompositeIntegrityChecker>();
         var writer = new Mock<IAtomicFileWriter>();
 
@@ -91,7 +91,7 @@ public class FileProcessorTests : IDisposable
         var ucPath = await MakeUcFileAsync("42-song.uc");
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
-        naming.Setup(n => n.GetOutputFileName(ucPath, AudioFormat.Mp3)).Returns("42-song.mp3");
+        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Mp3, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("42-song.mp3");
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
 
@@ -115,7 +115,7 @@ public class FileProcessorTests : IDisposable
         var ucPath = await MakeUcFileAsync();
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
-        naming.Setup(n => n.GetOutputFileName(ucPath, AudioFormat.Mp3)).Returns("out.mp3");
+        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Mp3, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("out.mp3");
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
 
@@ -139,7 +139,7 @@ public class FileProcessorTests : IDisposable
         var ucPath = await MakeUcFileAsync();
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
-        naming.Setup(n => n.GetOutputFileName(ucPath, AudioFormat.Mp3)).Returns("out.mp3");
+        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Mp3, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("out.mp3");
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
 
@@ -182,7 +182,7 @@ public class FileProcessorTests : IDisposable
         var ucPath = await MakeUcFileAsync("99-bad.uc");
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
-        naming.Setup(n => n.GetOutputFileName(ucPath, AudioFormat.Flac)).Returns("99-bad.flac");
+        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Flac, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("99-bad.flac");
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Failed(IntegrityLevel.L3, "PCM-MD5 mismatch"));
 
@@ -235,7 +235,7 @@ public class FileProcessorTests : IDisposable
     {
         var d = new Mock<IXorDecoder>().Object;
         var s = new Mock<IFormatSniffer>().Object;
-        var n = new Mock<INamingStrategy>().Object;
+        var n = new Mock<IFileNamer>().Object;
         var i = new Mock<ICompositeIntegrityChecker>().Object;
         var w = new Mock<IAtomicFileWriter>().Object;
         var l = new Mock<ILogger>().Object;
@@ -264,7 +264,7 @@ public class FileProcessorTests : IDisposable
         var sut = new FileProcessor(
             new XorDecoder(),
             new MagicByteFormatSniffer(),
-            new StemPlusExtensionNamingStrategy(),
+            new StemBasedFileNamer(),
             integrity.Object,
             new AtomicFileWriter(),
             new Mock<ILogger>().Object);
@@ -290,7 +290,7 @@ public class FileProcessorTests : IDisposable
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
                .ReturnsAsync(AudioFormat.Mp3);
-        naming.Setup(n => n.GetOutputFileName(ucPath, AudioFormat.Mp3)).Returns("42-song.mp3");
+        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Mp3, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("42-song.mp3");
 
         // Capture the path that integrity sees
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
@@ -312,7 +312,7 @@ public class FileProcessorTests : IDisposable
         var ucPath = await MakeUcFileAsync("77-meta.uc");
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
-        naming.Setup(n => n.GetOutputFileName(ucPath, AudioFormat.Flac)).Returns("77-meta.flac");
+        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Flac, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("77-meta.flac");
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Failed(IntegrityLevel.L3, "PCM-MD5 mismatch"));
 
@@ -348,7 +348,7 @@ public class FileProcessorTests : IDisposable
         expectedSize.Should().Be(4);
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
-        naming.Setup(n => n.GetOutputFileName(ucPath, AudioFormat.Flac)).Returns("size-check.flac");
+        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Flac, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("size-check.flac");
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Failed(IntegrityLevel.L1, "bad"));
 
@@ -368,7 +368,7 @@ public class FileProcessorTests : IDisposable
         await File.WriteAllBytesAsync(path, new byte[1234567]);
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
-        naming.Setup(n => n.GetOutputFileName(path, AudioFormat.Mp3)).Returns("big.mp3");
+        naming.Setup(n => n.GetTargetName(path, AudioFormat.Mp3, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("big.mp3");
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Failed(IntegrityLevel.L1, "bad"));
 
@@ -390,7 +390,7 @@ public class FileProcessorTests : IDisposable
         var expectedMtime = new DateTimeOffset(File.GetLastWriteTimeUtc(ucPath), TimeSpan.Zero);
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
-        naming.Setup(n => n.GetOutputFileName(ucPath, AudioFormat.Mp3)).Returns("mtime-check.mp3");
+        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Mp3, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("mtime-check.mp3");
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Failed(IntegrityLevel.L1, "bad"));
 
@@ -419,7 +419,7 @@ public class FileProcessorTests : IDisposable
         var expectedMtime = new DateTimeOffset(File.GetLastWriteTimeUtc(ucPath), TimeSpan.Zero);
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
-        naming.Setup(n => n.GetOutputFileName(ucPath, AudioFormat.Flac)).Returns("roundtrip.flac");
+        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Flac, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("roundtrip.flac");
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Failed(IntegrityLevel.L3, "PCM-MD5 mismatch"));
 
@@ -529,7 +529,7 @@ public class FileProcessorTests : IDisposable
         var ucPath = await MakeUcFileAsync("xx-fail.uc");
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
-        naming.Setup(n => n.GetOutputFileName(ucPath, AudioFormat.Mp3)).Returns("xx-fail.mp3");
+        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Mp3, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("xx-fail.mp3");
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Failed(IntegrityLevel.L1, "structural failure"));
 
@@ -555,7 +555,7 @@ public class FileProcessorTests : IDisposable
 
         sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
                .ReturnsAsync(AudioFormat.Flac);
-        naming.Setup(n => n.GetOutputFileName(ucPath, AudioFormat.Flac)).Returns("99-song.flac");
+        naming.Setup(n => n.GetTargetName(ucPath, AudioFormat.Flac, It.IsAny<FreeBird.Core.Metadata.SongInfo?>())).Returns("99-song.flac");
 
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .Callback<string, AudioFormat, IntegrityLevel, CancellationToken>((p, _, _, _) => capturedPath = p)
