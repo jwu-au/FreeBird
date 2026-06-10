@@ -68,4 +68,37 @@ public class WatchOptionsTests
         Action act = () => new WatchOptions("in", "out", MinFileSizeBytes: -1);
         act.Should().Throw<ArgumentOutOfRangeException>();
     }
+
+    [Fact]
+    public void Defaults_FiveMetadataFields_MatchSpec()
+    {
+        var opts = new WatchOptions("in", "out");
+
+        opts.NamingTemplate.Should().Be("{artist} - {title}");
+        opts.Offline.Should().BeFalse();
+        opts.ApiTimeoutSeconds.Should().Be(10);
+        opts.ApiRateLimit.Should().Be(0);
+        opts.WriteTags.Should().BeFalse();
+    }
+
+    [Fact]
+    public void WithBlocks_OverrideMetadataFields()
+    {
+        var a = new WatchOptions("in", "out");
+        var b = a with
+        {
+            NamingTemplate = "{musicId}",
+            Offline = true,
+            ApiTimeoutSeconds = 30,
+            ApiRateLimit = 5,
+            WriteTags = true,
+        };
+
+        a.NamingTemplate.Should().Be("{artist} - {title}");
+        b.NamingTemplate.Should().Be("{musicId}");
+        b.Offline.Should().BeTrue();
+        b.ApiTimeoutSeconds.Should().Be(30);
+        b.ApiRateLimit.Should().Be(5);
+        b.WriteTags.Should().BeTrue();
+    }
 }
