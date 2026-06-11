@@ -255,7 +255,20 @@ public class WatchCommandTests : IDisposable
         captured.Offline.Should().BeFalse();
         captured.ApiTimeoutSeconds.Should().Be(10);
         captured.ApiRateLimit.Should().Be(0);
-        captured.WriteTags.Should().BeFalse();
+        // v3.3: --write-tags now defaults to true.
+        captured.WriteTags.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Watch_NoWriteTagsFlag_DisablesTagWriting()
+    {
+        var (exit, _, _, captured) = await InvokeWatchAsync(
+            "watch", _inputDir, "--output", _outputDir, "--no-write-tags");
+
+        exit.Should().Be(0);
+        captured.Should().NotBeNull();
+        // v3.3: --no-write-tags opt-out flag overrides default --write-tags=true.
+        captured!.WriteTags.Should().BeFalse();
     }
 
     [Fact]

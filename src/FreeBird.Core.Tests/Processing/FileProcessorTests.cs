@@ -873,8 +873,9 @@ public class FileProcessorTests : IDisposable
     [Fact]
     public async Task ProcessAsync_WriteTagsFalse_DoesNotInvokeTagger()
     {
-        // WriteTags defaults to false in ScanOptions; the tagger mock must never be hit
-        // regardless of metadata outcome.
+        // v3.3: WriteTags defaults to TRUE; this test explicitly opts out via
+        // `with { WriteTags = false }` to validate the tagger mock is never hit
+        // when the user has disabled tag writing.
         var (sut, _, sniffer, naming, integrity, _, metadata, tagWriter) = MakeMockedSut();
         var ucPath = await MakeUcFileAsync("42.uc");
 
@@ -886,7 +887,8 @@ public class FileProcessorTests : IDisposable
         naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
               .Returns("A - T.flac");
 
-        var opts = DefaultOptions();   // WriteTags = false by default
+        // v3.3: must explicitly opt out — default flipped to true in v3.3.
+        var opts = DefaultOptions() with { WriteTags = false };
         var result = await sut.ProcessAsync(ucPath, opts);
 
         result.Outcome.Should().Be(ScanOutcome.Ok);
@@ -1078,7 +1080,9 @@ public class FileProcessorTests : IDisposable
         naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
               .Returns("My Artist - My Title.flac");
 
-        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+        // v3.3: opt out of tag writing here so TagWriteStatus stays null and we
+        // can assert the resolved marker schema independent of the new default.
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions() with { WriteTags = false });
 
         result.Outcome.Should().Be(ScanOutcome.Ok);
         var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "42");
@@ -1378,7 +1382,8 @@ public class FileProcessorTests : IDisposable
         naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
               .Returns("A - T.flac");
 
-        var result = await sut.ProcessAsync(ucPath, DefaultOptions());   // WriteTags=false
+        // v3.3: must explicitly opt out — default flipped to true in v3.3.
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions() with { WriteTags = false });
 
         result.Outcome.Should().Be(ScanOutcome.Ok);
         var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "42");
