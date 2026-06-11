@@ -30,6 +30,12 @@ public sealed class WatchOptions
     public int ApiRateLimit { get; init; } = MetadataDefaults.ApiRateLimit;
     public bool WriteTags { get; init; }
 
+    // T15 — v3.1 flac provisioning flags. Consumed by WatchRunner via FlacOptionsBinder
+    // to override the default FlacResolverOptions in the Autofac container.
+    public string? FlacBin { get; init; }
+    public string? FlacUrl { get; init; }
+    public bool NoAutoDownload { get; init; }
+
     /// <summary>
     /// Parses a duration string. Accepts: bare integer (= seconds), "Ns" (seconds), "Nm" (minutes).
     /// Rejects all other suffixes (e.g. "5h"). Throws <see cref="ArgumentException"/> on invalid input.

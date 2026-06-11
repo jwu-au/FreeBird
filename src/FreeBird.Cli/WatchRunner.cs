@@ -117,7 +117,17 @@ public sealed class WatchRunner
                 }
                 else
                 {
-                    container = BuildContainer(logger);
+                    // T15: resolve flac provisioning options from CLI flags + env vars BEFORE
+                    // building the container so the FlacResolverOptions override sees the final
+                    // values (CLI flag > env var > default).
+                    var flacOptions = FlacOptionsBinder.Resolve(
+                        cliOptions.FlacBin,
+                        cliOptions.FlacUrl,
+                        cliOptions.NoAutoDownload,
+                        Environment.GetEnvironmentVariable("FREEBIRD_FLAC_URL"),
+                        Environment.GetEnvironmentVariable("FREEBIRD_NO_AUTO_DOWNLOAD"));
+
+                    container = BuildContainer(logger, flacOptions);
                     scope = container.BeginLifetimeScope();
 
                     // T13 / parity with ScanRunner D2+D3+D4: probe flac at startup so we can
@@ -325,11 +335,25 @@ public sealed class WatchRunner
         WriteTags = cli.WriteTags,
     };
 
-    private static IContainer BuildContainer(ILogger logger)
+    private static IContainer BuildContainer(ILogger logger, FlacOptionsBinder.EffectiveFlacOptions flacOptions)
     {
         var builder = new ContainerBuilder();
         builder.RegisterModule<CoreModule>();
         builder.RegisterInstance(logger).As<ILogger>().SingleInstance();
+
+        // T15: override CoreModule's default FlacResolverOptions factory with one populated
+        // from the CLI/env-resolved values. Autofac's last-registration-wins makes this
+        // override resolve in preference to the in-module default. AppBaseDirectory is
+        // still pulled from IAppBaseDirectoryProvider so AppContext.BaseDirectory is honored.
+        builder.Register(c => new FreeBird.Core.Provisioning.FlacResolverOptions
+        {
+            AppBaseDirectory = c.Resolve<FreeBird.Core.Provisioning.IAppBaseDirectoryProvider>().GetBaseDirectory(),
+            FlacBinOverride = flacOptions.FlacBinOverride,
+            MetaflacBinOverride = null,
+            AutoInstallUrl = flacOptions.AutoInstallUrl,
+            DisableAutoInstall = flacOptions.DisableAutoInstall,
+        }).AsSelf().SingleInstance();
+
         // T18 test hook: let tests override individual registrations after the default
         // wiring is in place (Autofac's last-registration-wins behavior makes the override
         // resolve in preference to the CoreModule default).

@@ -15,6 +15,9 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="FreeBird.Core.Tests" />
+    <!-- T15: grant Cli.Tests access to internal WindowsFlacAutoInstaller.ExpectedSha256
+         setter so the Windows-only E2E test can pin its hand-built fixture's SHA. -->
+    <InternalsVisibleTo Include="FreeBird.Cli.Tests" />
   </ItemGroup>
 
 </Project>

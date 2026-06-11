@@ -191,6 +191,10 @@ public static class WatchCommand
             var apiTimeout = parseResult.GetValue(apiTimeoutOpt);
             var apiRateLimit = parseResult.GetValue(apiRateLimitOpt);
             var writeTags = parseResult.GetValue(writeTagsOpt);
+            // T15: flac provisioning flags routed through FlacOptionsBinder inside WatchRunner.
+            var flacBin = parseResult.GetValue(flacBinOpt);
+            var flacUrl = parseResult.GetValue(flacUrlOpt);
+            var noAutoDownload = parseResult.GetValue(noAutoDownloadOpt);
 
             // T19b: validate metadata flags (template + api-timeout + api-rate-limit).
             var metaValidationExit = MetadataFlagsValidator.Validate(
@@ -293,6 +297,9 @@ public static class WatchCommand
                 ApiTimeoutSeconds = apiTimeout,
                 ApiRateLimit = apiRateLimit,
                 WriteTags = writeTags,
+                FlacBin = flacBin,
+                FlacUrl = flacUrl,
+                NoAutoDownload = noAutoDownload,
             };
 
             if (HandlerOverride is not null)

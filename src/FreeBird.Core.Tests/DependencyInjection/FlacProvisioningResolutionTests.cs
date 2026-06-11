@@ -107,4 +107,41 @@ public class FlacProvisioningResolutionTests
         var r2 = s2.Resolve<IFlacBinaryResolver>();
         r1.Should().NotBeSameAs(r2);
     }
+
+    // --- T15 — IHttpDownloader + OS-conditional installer registration ---
+
+    [Fact]
+    public void IHttpDownloader_ResolvesAsHttpClientDownloader()
+    {
+        // T15: CoreModule explicitly registers HttpClientDownloader as IHttpDownloader so
+        // WindowsFlacAutoInstaller's constructor can satisfy its dependency on Windows.
+        // The type is NOT marked IDependency, so this test pins the explicit registration.
+        using var c = BuildContainer();
+        c.Resolve<IHttpDownloader>().Should().BeOfType<HttpClientDownloader>();
+    }
+
+    [Fact]
+    public void IHttpDownloader_IsSingleInstance()
+    {
+        // HttpClientDownloader owns its HttpClient; SingleInstance scoping ensures one
+        // wrapped HttpClient + Dispose at container shutdown.
+        using var c = BuildContainer();
+        var a = c.Resolve<IHttpDownloader>();
+        var b = c.Resolve<IHttpDownloader>();
+        a.Should().BeSameAs(b);
+    }
+
+    [Fact]
+    public void IFlacAutoInstaller_OnMacOS_RemainsNoOp()
+    {
+        // T15 guard: the OS-conditional swap MUST NOT trigger on macOS / Linux dev boxes.
+        // On Windows the swap installs WindowsFlacAutoInstaller; we cannot exercise that
+        // branch from a macOS test runner so we assert the negative.
+        if (System.OperatingSystem.IsWindows())
+        {
+            return;  // Windows path is verified by the WindowsAutoInstallE2ETests SkippableFact
+        }
+        using var c = BuildContainer();
+        c.Resolve<IFlacAutoInstaller>().Should().BeOfType<NoOpFlacAutoInstaller>();
+    }
 }

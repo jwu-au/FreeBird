@@ -126,6 +126,10 @@ public static class CliRoot
             var apiTimeout = parseResult.GetValue(apiTimeoutOpt);
             var apiRateLimit = parseResult.GetValue(apiRateLimitOpt);
             var writeTags = parseResult.GetValue(writeTagsOpt);
+            // T15: flac provisioning flags routed through FlacOptionsBinder inside ScanRunner.
+            var flacBin = parseResult.GetValue(flacBinOpt);
+            var flacUrl = parseResult.GetValue(flacUrlOpt);
+            var noAutoDownload = parseResult.GetValue(noAutoDownloadOpt);
 
             var validationExit = MetadataFlagsValidator.Validate(
                 namingTemplate, apiTimeout, apiRateLimit, Console.Error);
@@ -137,6 +141,7 @@ public static class CliRoot
             return await ScanRunner.RunAsync(
                 input, output, integrity, concurrency, collision, verbose, quiet,
                 namingTemplate, offline, apiTimeout, apiRateLimit, writeTags,
+                flacBin, flacUrl, noAutoDownload,
                 ct);
         });
 

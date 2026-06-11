@@ -1,6 +1,8 @@
 using System;
 using System.IO;
 using System.Threading.Tasks;
+using Autofac;
+using Autofac.Builder;
 using FluentAssertions;
 using FreeBird.Cli;
 using FreeBird.Core.Models;
@@ -228,5 +230,132 @@ public class ScanRunnerCliFlagsTests : IDisposable
         exit.Should().Be(0);
         captured.Should().NotBeNull();
         captured!.Offline.Should().BeTrue();
+    }
+
+    // --- T15: FlacOptionsBinder wiring through ScanRunner ---
+    //
+    // We assert FlacResolverOptions inside the container reflects CLI --flac-bin / --flac-url /
+    // --no-auto-download values. Done via AdditionalContainerSetup which runs AFTER ScanRunner
+    // installs its post-CoreModule FlacResolverOptions override; we register a probe scoped to
+    // last-wins-after-that and resolve the override at scope time. Simplest pattern: run the
+    // real container build, then read FlacResolverOptions out of the scope captured via probe.
+
+    [Fact]
+    public async Task ScanRunner_FlacBinFlag_PopulatesFlacResolverOptions()
+    {
+        FreeBird.Core.Provisioning.FlacResolverOptions? captured = null;
+        ScanRunner.AdditionalContainerSetup = b =>
+        {
+            // Register a probe that captures the FlacResolverOptions at resolution time.
+            // The runner's post-Module override has ALREADY been registered by the time
+            // this hook runs, so Resolve here sees the CLI-driven values.
+            b.RegisterBuildCallback(scope =>
+            {
+                captured = scope.Resolve<FreeBird.Core.Provisioning.FlacResolverOptions>();
+            });
+        };
+        try
+        {
+            var exit = await ScanRunner.RunAsync(
+                _inputDir, _outputDir,
+                IntegrityLevel.Off,
+                concurrency: 1,
+                collision: CollisionPolicy.Skip,
+                verbose: false,
+                quiet: true,
+                flacBin: "/custom/path/to/flac",
+                flacUrl: null,
+                noAutoDownload: true);
+
+            exit.Should().Be(ScanRunner.ExitOk);
+            captured.Should().NotBeNull();
+            captured!.FlacBinOverride.Should().Be("/custom/path/to/flac");
+            captured.DisableAutoInstall.Should().BeTrue();
+        }
+        finally
+        {
+            ScanRunner.AdditionalContainerSetup = null;
+        }
+    }
+
+    [Fact]
+    public async Task ScanRunner_NoFlacFlags_DefaultsRemain()
+    {
+        FreeBird.Core.Provisioning.FlacResolverOptions? captured = null;
+        ScanRunner.AdditionalContainerSetup = b =>
+        {
+            b.RegisterBuildCallback(scope =>
+            {
+                captured = scope.Resolve<FreeBird.Core.Provisioning.FlacResolverOptions>();
+            });
+        };
+        try
+        {
+            // Ensure env vars are unset so we test the pure-default path
+            var prevUrl = Environment.GetEnvironmentVariable("FREEBIRD_FLAC_URL");
+            var prevNoAuto = Environment.GetEnvironmentVariable("FREEBIRD_NO_AUTO_DOWNLOAD");
+            Environment.SetEnvironmentVariable("FREEBIRD_FLAC_URL", null);
+            Environment.SetEnvironmentVariable("FREEBIRD_NO_AUTO_DOWNLOAD", null);
+            try
+            {
+                var exit = await ScanRunner.RunAsync(
+                    _inputDir, _outputDir,
+                    IntegrityLevel.Off,
+                    concurrency: 1,
+                    collision: CollisionPolicy.Skip,
+                    verbose: false,
+                    quiet: true);
+
+                exit.Should().Be(ScanRunner.ExitOk);
+                captured.Should().NotBeNull();
+                captured!.FlacBinOverride.Should().BeNull();
+                captured.AutoInstallUrl.Should().BeNull();
+                captured.DisableAutoInstall.Should().BeFalse();
+                captured.AppBaseDirectory.Should().NotBeNullOrEmpty();
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("FREEBIRD_FLAC_URL", prevUrl);
+                Environment.SetEnvironmentVariable("FREEBIRD_NO_AUTO_DOWNLOAD", prevNoAuto);
+            }
+        }
+        finally
+        {
+            ScanRunner.AdditionalContainerSetup = null;
+        }
+    }
+
+    [Fact]
+    public async Task ScanRunner_EnvVar_FlacUrl_FlowsThrough_WhenNoFlag()
+    {
+        FreeBird.Core.Provisioning.FlacResolverOptions? captured = null;
+        ScanRunner.AdditionalContainerSetup = b =>
+        {
+            b.RegisterBuildCallback(scope =>
+            {
+                captured = scope.Resolve<FreeBird.Core.Provisioning.FlacResolverOptions>();
+            });
+        };
+        var prevUrl = Environment.GetEnvironmentVariable("FREEBIRD_FLAC_URL");
+        Environment.SetEnvironmentVariable("FREEBIRD_FLAC_URL", "https://mirror.example.com/flac.zip");
+        try
+        {
+            var exit = await ScanRunner.RunAsync(
+                _inputDir, _outputDir,
+                IntegrityLevel.Off,
+                concurrency: 1,
+                collision: CollisionPolicy.Skip,
+                verbose: false,
+                quiet: true);
+
+            exit.Should().Be(ScanRunner.ExitOk);
+            captured.Should().NotBeNull();
+            captured!.AutoInstallUrl.Should().Be("https://mirror.example.com/flac.zip");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("FREEBIRD_FLAC_URL", prevUrl);
+            ScanRunner.AdditionalContainerSetup = null;
+        }
     }
 }

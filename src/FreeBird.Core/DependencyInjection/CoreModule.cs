@@ -184,8 +184,9 @@ public sealed class CoreModule : Module
                .SingleInstance();
 
         // FlacResolverOptions factory — pulls AppBaseDirectory from the provider at first
-        // resolution. Override / URL / DisableAutoInstall stay null/false until the CLI
-        // binder (T11) replaces this registration with one populated from FlacOptions.
+        // resolution. Override / URL / DisableAutoInstall stay null/false here; the CLI
+        // runners (T15: ScanRunner / WatchRunner) replace this registration post-module
+        // with one populated from FlacOptionsBinder.Resolve() so CLI flags + env vars win.
         builder.Register(c => new FreeBird.Core.Provisioning.FlacResolverOptions
                {
                    AppBaseDirectory = c.Resolve<FreeBird.Core.Provisioning.IAppBaseDirectoryProvider>().GetBaseDirectory(),
@@ -196,5 +197,27 @@ public sealed class CoreModule : Module
                })
                .AsSelf()
                .SingleInstance();
+
+        // T15 — IHttpDownloader registration. WindowsFlacAutoInstaller depends on this;
+        // on non-Windows platforms NoOpFlacAutoInstaller never resolves it, so the
+        // HttpClientDownloader instance is constructed lazily only when an installer
+        // that actually needs it is resolved. SingleInstance scoping ensures the wrapped
+        // HttpClient is shared and its Dispose runs at container shutdown.
+        builder.RegisterType<FreeBird.Core.Provisioning.HttpClientDownloader>()
+               .As<FreeBird.Core.Provisioning.IHttpDownloader>()
+               .SingleInstance();
+
+        // T15 — OS-conditional installer swap. On Windows we override the auto-scanned
+        // NoOpFlacAutoInstaller with WindowsFlacAutoInstaller via Autofac's
+        // last-registration-wins semantics. On macOS / Linux the auto-scan-registered
+        // NoOpFlacAutoInstaller remains the IFlacAutoInstaller. WindowsFlacAutoInstaller
+        // is explicitly excluded from the IDependency auto-scan above so it does not
+        // collide with NoOp on non-Windows hosts.
+        if (System.OperatingSystem.IsWindows())
+        {
+            builder.RegisterType<FreeBird.Core.Provisioning.WindowsFlacAutoInstaller>()
+                   .As<FreeBird.Core.Provisioning.IFlacAutoInstaller>()
+                   .SingleInstance();
+        }
     }
 }
