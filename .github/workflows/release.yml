@@ -51,6 +51,7 @@ jobs:
       - run: dotnet build --no-restore -c Release   # sanity step (Q11+)
 
       - name: Publish
+        shell: bash
         run: |
           dotnet publish src/FreeBird.Cli/FreeBird.Cli.csproj \
             -c Release -r ${{ matrix.rid }} \
