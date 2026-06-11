@@ -5,6 +5,41 @@ All notable changes to FreeBird are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] — 2026-06-11
+
+### Added
+- **Windows: auto-download official Xiph FLAC 1.5.0 binary** (~1.3 MB) from xiph.org with pinned SHA-256 verification, when no `flac` / `metaflac` is found alongside `fb.exe` or on PATH.
+  - Triggered on first need (scan/watch encounters need for L3 integrity or FLAC tag write).
+  - ZIP path-traversal safe (rejects entries with `..` or absolute paths).
+  - Cleaned up partial downloads on failure.
+  - Opt out: `--no-auto-download` or `FREEBIRD_NO_AUTO_DOWNLOAD=1`.
+- **macOS / Linux: actionable error messaging** when `flac` / `metaflac` is missing (points at `brew install flac` / `apt install flac` etc.).
+- **New subcommand: `fb install-flac`** for explicit installer trigger (CI / sysadmin / troubleshooting).
+  - Flags: `--target <dir>` (default = `<fb dir>`), `--url <url>` (advanced, hidden).
+- **New flags** (scan + watch):
+  - `--flac-bin <path>` — override probe chain (use a specific flac binary).
+  - `--no-auto-download` — disable Windows auto-download for this run.
+  - `--flac-url <url>` — (hidden / advanced) override download URL; also via `FREEBIRD_FLAC_URL` env.
+- **Hybrid integrity-degradation policy** when `flac` is unavailable:
+  - `off` / `l1`: silent proceed.
+  - `auto` (default): warn + degrade to L1, exit 0.
+  - `l3`: exit 2 with install hint (fail-fast).
+- **`tag-tool-missing` sidecar reason** when `metaflac` is unavailable for FLAC tag write (audio output unaffected).
+
+### Changed
+- `FlacToolIntegrityChecker` and `FlacTagWriter` no longer hardcode `"flac"` / `"metaflac"` strings — they resolve binary paths via `IFlacBinaryResolver` (probe chain: explicit override → `<fb dir>/` → PATH).
+- `FlacProbe` is now a lazy thin wrapper over `IFlacBinaryResolver`; the eager-probe at process startup is unchanged (still occurs in `ScanRunner` / `WatchRunner` for the integrity-mode gate).
+- `ScanRunner` and `WatchRunner` both now do a startup flac probe and emit the `auto` warning / `l3` fail-fast consistently. (`WatchRunner` previously did not; now matches `ScanRunner`.)
+
+### Fixed
+- (none specific to v3.1; v3.0.1 covered the metadata-fetch infinite loop.)
+
+### Tests
+- +90 new tests across resolver, installer, hybrid degradation, CLI binding, DI registration, and a SkippableFact end-to-end Windows download test (skipped on macOS / Linux). Total: 825 passed, 4 skipped, 0 failed.
+
+### License acknowledgment
+- Windows auto-download fetches FLAC binaries distributed by Xiph.Org Foundation under their own license terms. FreeBird invokes them as separate processes only.
+
 ## [3.0.1] — 2026-06-11
 
 ### Fixed

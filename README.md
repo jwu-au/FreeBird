@@ -6,6 +6,16 @@ One-sweep CLI to decrypt NetEase Cloud Music `.uc` / `.uc!` cache files (XOR `0x
 
 ---
 
+## What's new in v3.1
+
+**Bundled FLAC binary support**:
+- Windows: when `flac.exe` is missing, FreeBird auto-downloads the official Xiph FLAC 1.5.0 release (~1.3 MB) from xiph.org and verifies it via pinned SHA-256.
+- macOS / Linux: if `flac` is missing, FreeBird prints a clear instruction to install via `brew install flac` (macOS) or `apt install flac` (Debian/Ubuntu) and continues with structural-only checks (L1) under `--integrity auto`.
+- New explicit subcommand: `fb install-flac` — useful for CI / sysadmin / pre-warming.
+- New advanced flags: `--flac-bin <path>`, `--no-auto-download` (the `--flac-url` flag is hidden/advanced; also honored via `FREEBIRD_FLAC_URL` and `FREEBIRD_NO_AUTO_DOWNLOAD` env vars).
+
+---
+
 ## What's new in v3
 
 v3 adds **NetEase API–driven naming** and **optional tag-writing** to the decoder pipeline.
@@ -103,37 +113,35 @@ migration path:
 
 ### Build from source
 
-Requires the **.NET 10 SDK** ([download](https://dotnet.microsoft.com/download/dotnet/10.0)).
-
-```bash
-git clone git@github.com:jwu-au/FreeBird.git
+```
+git clone <this repo>
 cd FreeBird
 dotnet build -c Release
 ```
 
-The CLI binary is produced at:
+The `fb` (Windows: `fb.exe`) binary will be at `src/FreeBird.Cli/bin/Release/net10.0/`.
 
-```
-src/FreeBird.Cli/bin/Release/net10.0/fb        # macOS / Linux
-src/FreeBird.Cli/bin/Release/net10.0/fb.exe    # Windows
-```
+### `flac` binary dependency (v3.1)
 
-You can copy it anywhere on your `PATH`, or invoke it directly via `dotnet run --project src/FreeBird.Cli`.
+FreeBird needs the official `flac` binary for L3 (PCM-MD5) integrity verification on FLAC files, and `metaflac` for FLAC tag writing.
 
-### Optional: install `flac` for full integrity verification
+| OS | How FreeBird finds `flac` |
+|---|---|
+| **Windows** | **Auto-download** on first need: official Xiph 1.5.0 release is fetched from xiph.org, SHA-verified, and extracted alongside `fb.exe`. No manual install. To opt out: `--no-auto-download` or set `FREEBIRD_NO_AUTO_DOWNLOAD=1`. To pre-warm in CI: `fb install-flac`. |
+| **macOS** | `brew install flac` |
+| **Linux (Debian/Ubuntu)** | `sudo apt install flac` |
+| **Linux (Fedora)** | `sudo dnf install flac` |
+| **Linux (Arch)** | `sudo pacman -S flac` |
+| **Docker** | `RUN apt install -y flac && rm -rf /var/lib/apt/lists/*` |
 
-The L3 integrity level uses the official `flac` binary to decode every FLAC frame and verify the PCM-MD5 checksum stored in the file's `STREAMINFO` block — the gold-standard FLAC integrity check.
+Probe order (all platforms): `--flac-bin <path>` → `<fb dir>/flac{.exe}` → `flac` on PATH.
 
-| OS | Install command |
-|----|------|
-| macOS | `brew install flac` |
-| Linux (Debian/Ubuntu) | `sudo apt install flac` |
-| Linux (Fedora) | `sudo dnf install flac` |
-| Windows (Chocolatey) | `choco install flac` |
-| Windows (Scoop) | `scoop install flac` |
-| Windows (manual) | Download from [xiph.org/flac](https://xiph.org/flac/download.html) and add the folder to `PATH` |
+Without `flac`:
+- `--integrity off` and `--integrity l1` work fine (no FLAC L3 features).
+- `--integrity auto` (default) gracefully degrades to L1 with a one-time warning.
+- `--integrity l3` exits 2 with an install hint.
 
-If `flac` is not installed, FreeBird automatically falls back to L1 verification for FLAC files.
+Without `metaflac` (FLAC tag writing): tag write is silently skipped for FLAC files (recorded in sidecar as `tag-tool-missing`), audio output is unaffected.
 
 ---
 
@@ -175,6 +183,29 @@ fb --help
 fb scan --help
 fb watch --help
 ```
+
+### Advanced flags (all subcommands, v3.1+)
+
+| Flag | Env var | Default | Purpose |
+|---|---|---|---|
+| `--flac-bin <path>` | — | (auto-probe) | Force a specific `flac` binary location, skipping the probe chain. |
+| `--no-auto-download` | `FREEBIRD_NO_AUTO_DOWNLOAD=1` | off | Disable the Windows auto-download. Equivalent to having no `flac` on PATH. |
+| `--flac-url <url>` | `FREEBIRD_FLAC_URL` | pinned Xiph 1.5.0 | (hidden) Override download source. For air-gapped networks or alternative mirrors. Used by `fb install-flac` and the auto-install path on Windows. |
+
+### `fb install-flac` (Windows only — pre-warm the flac binary)
+
+Explicitly trigger the Windows auto-download outside of a scan/watch cycle. Useful for:
+- CI: install flac before the first scan to avoid first-run race.
+- Sysadmin: install to a custom directory.
+- Troubleshooting: re-install after corruption.
+
+```
+fb install-flac
+fb install-flac --target C:\tools\flac
+fb install-flac --target /opt/flac --url https://your-mirror.example/flac.zip
+```
+
+On macOS / Linux: prints a polite message pointing at the OS package manager (brew/apt) and exits 0.
 
 ---
 
@@ -311,6 +342,9 @@ No files in the input directory are ever modified or deleted.
 - **No ID3 tag writing** — decoded files have the same tags as the original cache (which NetEase strips before caching).
 - **`flac` binary must be on `PATH`** for L3 — no config-file override yet.
 - **No recursive directory scan** — input directory is scanned non-recursively.
+- Windows auto-download requires write access to the `fb.exe` directory (typically true for user installs; system-wide installs to `Program Files` require admin or `--no-auto-download`).
+- Auto-download URL and SHA are pinned to Xiph FLAC 1.5.0. Newer FLAC versions on PATH still work; the auto-download is just for the bundled-fallback case.
+- `fb install-flac` on macOS/Linux only prints package-manager hints (no auto-install) to respect upstream maintainer-managed installs.
 
 ---
 
@@ -338,3 +372,7 @@ DI is wired via [Autofac](https://autofac.org/) using an `IDependency` marker-in
 ## License
 
 TBD.
+
+### FLAC licensing acknowledgment
+
+When used on Windows, FreeBird auto-downloads the Xiph FLAC binary (`flac.exe`, `metaflac.exe`, `libFLAC.dll`, `libFLAC++.dll`) from xiph.org. These binaries are distributed by Xiph.Org Foundation under their own license terms (the FLAC source license is BSD-style for libFLAC and GPL v2 for the `flac` / `metaflac` command-line tools). FreeBird only invokes them as separate processes (no static linking) and ships no FLAC source code or binaries in this repository. Users redistributing FreeBird should be aware of Xiph's licensing terms if they bundle the downloaded binaries: https://xiph.org/flac/license.html
