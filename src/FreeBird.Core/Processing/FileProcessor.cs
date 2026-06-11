@@ -137,9 +137,13 @@ public sealed class FileProcessor : IFileProcessor
             // Step 6: integrity failed -> quarantine
             if (!integrity.Ok)
             {
-                // Pass the per-run template for consistency; the namer's fallback rule
-                // (metadata is null => {musicId}.{ext}) ignores it on this path anyway.
-                var outputName = _naming.GetTargetName(sourcePath, format, metadata: null, options.NamingTemplate);
+                // v3.2: use sourceStem (not metadata-driven naming) so the quarantine
+                // filename matches FilesystemSkipDecider's stem glob, preventing watch
+                // mode from re-decoding permanently-failed files on every poll cycle.
+                // Also disambiguates multi-bitrate cache files with the same musicId.
+                // Mirrors the UnknownFormat sibling path at line 114-115.
+                var quarantinedExtension = GetExtensionForFormat(format);
+                var outputName = $"{sourceStem}{quarantinedExtension}";
                 var quarantinedPath = QuarantineFile(
                     stagingPath, failedDir, outputName,
                     sourcePath, format, integrity.LevelApplied, integrity.Reason ?? "Integrity failed");
