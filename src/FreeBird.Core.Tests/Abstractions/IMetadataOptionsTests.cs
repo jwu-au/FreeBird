@@ -18,7 +18,7 @@ public class IMetadataOptionsTests
         asMetadata.Offline.Should().BeFalse();
         asMetadata.ApiTimeoutSeconds.Should().Be(10);
         asMetadata.ApiRateLimit.Should().Be(0);
-        asMetadata.WriteTags.Should().BeFalse();
+        asMetadata.WriteTags.Should().BeTrue();
     }
 
     [Fact]
@@ -33,7 +33,7 @@ public class IMetadataOptionsTests
         asMetadata.Offline.Should().BeFalse();
         asMetadata.ApiTimeoutSeconds.Should().Be(10);
         asMetadata.ApiRateLimit.Should().Be(0);
-        asMetadata.WriteTags.Should().BeFalse();
+        asMetadata.WriteTags.Should().BeTrue();
     }
 
     [Fact]

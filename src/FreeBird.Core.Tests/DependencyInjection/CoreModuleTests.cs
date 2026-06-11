@@ -235,7 +235,7 @@ public class CoreModuleTests
         options.Offline.Should().BeFalse();
         options.ApiTimeoutSeconds.Should().Be(10);
         options.ApiRateLimit.Should().Be(0);
-        options.WriteTags.Should().BeFalse();
+        options.WriteTags.Should().BeTrue();
     }
 
     // ------------------------------------------------------------------

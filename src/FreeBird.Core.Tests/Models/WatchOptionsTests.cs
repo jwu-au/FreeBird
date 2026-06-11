@@ -78,7 +78,7 @@ public class WatchOptionsTests
         opts.Offline.Should().BeFalse();
         opts.ApiTimeoutSeconds.Should().Be(10);
         opts.ApiRateLimit.Should().Be(0);
-        opts.WriteTags.Should().BeFalse();
+        opts.WriteTags.Should().BeTrue();
     }
 
     [Fact]
