@@ -41,7 +41,10 @@ public sealed class CoreModule : Module
                           && t != typeof(FreeBird.Core.Tagging.FlacTagWriter)
                           && t != typeof(FreeBird.Core.Tagging.Mp3TagWriter)
                           && t != typeof(FreeBird.Core.Tagging.M4aTagWriter)
-                          && t != typeof(FreeBird.Core.Tagging.CompositeTagWriter))
+                          && t != typeof(FreeBird.Core.Tagging.CompositeTagWriter)
+                          // WindowsFlacAutoInstaller is registered OS-conditionally in T15 to
+                          // avoid colliding with NoOpFlacAutoInstaller's auto-scan registration.
+                          && t != typeof(FreeBird.Core.Provisioning.WindowsFlacAutoInstaller))
                .AsImplementedInterfaces()
                .InstancePerLifetimeScope();
 
