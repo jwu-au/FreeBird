@@ -565,6 +565,56 @@ public sealed class FilesystemSkipDeciderTests : IDisposable
         sink.Events.Where(e => e.Level == LogEventLevel.Information).Should().BeEmpty();
     }
 
+    // -----------------------------------------------------------------------
+    // v3.2 T03 — Regression test for stem-named quarantine sidecar.
+    //
+    // Before T02, FileProcessor wrote IntegrityFailed sidecars using musicId
+    // (e.g., "3367798042.flac.txt"), but FilesystemSkipDecider globs by
+    // source stem ("{stem}.*.txt"). The mismatch caused infinite re-decode
+    // loops in watch mode. T02 fixed the writer to use the full stem. This
+    // test asserts the end-to-end glob+parse+match path now succeeds for
+    // a real NetEase-format composite stem.
+    // -----------------------------------------------------------------------
+    [Fact]
+    public async Task Decide_StemNamedSidecar_WithMatchingSizeAndMtime_ReturnsSkipSourceUnchangedSinceFailure()
+    {
+        var root = NewTempDir();
+        const string stem = "3367798042-_-_5999-_-_a38658b6e504b7520bb4c507db13b9d2";
+        const string sourceFileName = stem + ".uc!";
+
+        // Real NetEase-format source under a "cache" subdir of the input root.
+        var cacheDir = Path.Combine(root, "in", "cache");
+        Directory.CreateDirectory(cacheDir);
+        var sourcePath = Path.Combine(cacheDir, sourceFileName);
+        File.WriteAllBytes(sourcePath, new byte[] { 0xA3, 0xA3, 0xA3 });
+
+        var info = new FileInfo(sourcePath);
+        var mtime = new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero);
+
+        // Pre-write the stem-named sidecar exactly as T02's FileProcessor now does.
+        var failedDir = Path.Combine(root, "out", ".freebird-failed");
+        var sidecarPath = WriteV2Sidecar(
+            failedDir,
+            stem + ".flac.txt",
+            sourcePath,
+            info.Length,
+            mtime,
+            format: AudioFormat.Flac,
+            integrityLevel: IntegrityLevel.L3,
+            reason: "integrity failed (flac -t failed)");
+
+        // Source must be >= MinFileSizeBytes; lower the threshold for this 3-byte file.
+        var opts = OptionsFor(root, minSize: 1);
+
+        // Real reader + real marker serializer — this is the regression integration.
+        var sut = WithRealReader();
+        var decision = await sut.DecideAsync(sourcePath, opts, CancellationToken.None);
+
+        decision.ShouldProcess.Should().BeFalse();
+        decision.Reason.Should().Be(SkipReason.SourceUnchangedSinceFailure);
+        decision.Detail.Should().Contain(sidecarPath);
+    }
+
     /// <summary>Tiny in-memory Serilog sink for assertions on log output.</summary>
     private sealed class InMemorySink : ILogEventSink
     {
