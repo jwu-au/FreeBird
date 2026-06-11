@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Threading;
@@ -8,6 +9,8 @@ using FreeBird.Core.Abstractions;
 using FreeBird.Core.Infrastructure;
 using FreeBird.Core.Integrity;
 using FreeBird.Core.Models;
+using FreeBird.Core.Provisioning;
+using Moq;
 using Xunit;
 using Fx = FreeBird.Core.Tests.Fixtures.Fixtures;
 
@@ -22,7 +25,30 @@ public class FlacToolIntegrityCheckerTests : IDisposable
     public FlacToolIntegrityCheckerTests()
     {
         Directory.CreateDirectory(_tempDir);
-        _sut = new FlacToolIntegrityChecker(new SystemProcessRunner());
+        _sut = new FlacToolIntegrityChecker(new SystemProcessRunner(), PathResolver("flac"));
+    }
+
+    // Resolver that returns whatever path the system would resolve `flac` to via PATH.
+    // For integration tests using the real SystemProcessRunner, returning the literal
+    // "flac" lets the OS handle PATH lookup — preserving prior behavior.
+    private static IFlacBinaryResolver PathResolver(string binaryName)
+    {
+        var m = new Mock<IFlacBinaryResolver>();
+        m.Setup(r => r.ResolveFlacAsync(It.IsAny<CancellationToken>()))
+         .ReturnsAsync(new FlacResolution(binaryName, FlacBinaryProvenance.Path));
+        m.Setup(r => r.ResolveMetaflacAsync(It.IsAny<CancellationToken>()))
+         .ReturnsAsync(new FlacResolution(binaryName, FlacBinaryProvenance.Path));
+        return m.Object;
+    }
+
+    private static IFlacBinaryResolver NotFoundResolver()
+    {
+        var m = new Mock<IFlacBinaryResolver>();
+        m.Setup(r => r.ResolveFlacAsync(It.IsAny<CancellationToken>()))
+         .ReturnsAsync(FlacResolution.NotFound);
+        m.Setup(r => r.ResolveMetaflacAsync(It.IsAny<CancellationToken>()))
+         .ReturnsAsync(FlacResolution.NotFound);
+        return m.Object;
     }
 
     public void Dispose()
@@ -121,7 +147,47 @@ public class FlacToolIntegrityCheckerTests : IDisposable
     [Fact]
     public void Constructor_NullRunner_Throws()
     {
-        Action act = () => _ = new FlacToolIntegrityChecker(null!);
+        Action act = () => _ = new FlacToolIntegrityChecker(null!, PathResolver("flac"));
         act.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void Constructor_NullResolver_Throws()
+    {
+        Action act = () => _ = new FlacToolIntegrityChecker(new SystemProcessRunner(), null!);
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public async Task CheckAsync_ResolverNotFound_ThrowsFlacNotAvailableException()
+    {
+        // Real file must exist so we get past the FileNotFoundException guard;
+        // any FLAC file works since the resolver gate fires before the subprocess.
+        var sut = new FlacToolIntegrityChecker(new SystemProcessRunner(), NotFoundResolver());
+
+        Func<Task> act = () => sut.CheckAsync(Fx.SampleFlacPath, AudioFormat.Flac);
+
+        await act.Should().ThrowAsync<FlacNotAvailableException>();
+    }
+
+    [Fact]
+    public async Task CheckAsync_PassesResolvedPath_NotHardcodedFlacString()
+    {
+        // Verify the process runner receives the resolver-supplied path, not the
+        // hardcoded literal "flac". This is the core T12 contract.
+        const string ResolvedPath = "/custom/path/to/flac";
+        string? capturedExe = null;
+        var runner = new Mock<IProcessRunner>();
+        runner.Setup(r => r.RunAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+              .Callback<string, IReadOnlyList<string>, CancellationToken>((exe, _, _) => capturedExe = exe)
+              .ReturnsAsync(new ProcessResult(0, "", ""));
+        var resolver = new Mock<IFlacBinaryResolver>();
+        resolver.Setup(r => r.ResolveFlacAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new FlacResolution(ResolvedPath, FlacBinaryProvenance.CliOverride));
+        var sut = new FlacToolIntegrityChecker(runner.Object, resolver.Object);
+
+        await sut.CheckAsync(Fx.SampleFlacPath, AudioFormat.Flac);
+
+        capturedExe.Should().Be(ResolvedPath);
     }
 }

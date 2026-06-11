@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using FreeBird.Core.Abstractions;
 using FreeBird.Core.Metadata;
+using FreeBird.Core.Provisioning;
 using FreeBird.Core.Tagging;
 using Moq;
 using Serilog;
@@ -25,8 +26,30 @@ public sealed class FlacTagWriterTests
         return m.Object;
     }
 
-    private static FlacTagWriter Build(Mock<IProcessRunner> runner)
-        => new(runner.Object, NullLogger());
+    // Default resolver returns the literal "metaflac" path — preserves prior tests
+    // that asserted the subprocess was invoked as "metaflac".
+    private static IFlacBinaryResolver DefaultResolver(string metaflacPath = "metaflac")
+    {
+        var m = new Mock<IFlacBinaryResolver>();
+        m.Setup(r => r.ResolveMetaflacAsync(It.IsAny<CancellationToken>()))
+         .ReturnsAsync(new FlacResolution(metaflacPath, FlacBinaryProvenance.Path));
+        m.Setup(r => r.ResolveFlacAsync(It.IsAny<CancellationToken>()))
+         .ReturnsAsync(new FlacResolution("flac", FlacBinaryProvenance.Path));
+        return m.Object;
+    }
+
+    private static IFlacBinaryResolver NotFoundResolver()
+    {
+        var m = new Mock<IFlacBinaryResolver>();
+        m.Setup(r => r.ResolveMetaflacAsync(It.IsAny<CancellationToken>()))
+         .ReturnsAsync(FlacResolution.NotFound);
+        m.Setup(r => r.ResolveFlacAsync(It.IsAny<CancellationToken>()))
+         .ReturnsAsync(FlacResolution.NotFound);
+        return m.Object;
+    }
+
+    private static FlacTagWriter Build(Mock<IProcessRunner> runner, IFlacBinaryResolver? resolver = null)
+        => new(runner.Object, resolver ?? DefaultResolver(), NullLogger());
 
     private static Mock<IProcessRunner> RunnerReturning(int exit, string stdout = "", string stderr = "")
     {
@@ -201,11 +224,50 @@ public sealed class FlacTagWriterTests
 
     [Fact]
     public void Constructor_NullRunner_Throws()
-        => ((Action)(() => _ = new FlacTagWriter(null!, new Mock<ILogger>().Object)))
+        => ((Action)(() => _ = new FlacTagWriter(null!, DefaultResolver(), new Mock<ILogger>().Object)))
+            .Should().Throw<ArgumentNullException>();
+
+    [Fact]
+    public void Constructor_NullResolver_Throws()
+        => ((Action)(() => _ = new FlacTagWriter(new Mock<IProcessRunner>().Object, null!, new Mock<ILogger>().Object)))
             .Should().Throw<ArgumentNullException>();
 
     [Fact]
     public void Constructor_NullLogger_Throws()
-        => ((Action)(() => _ = new FlacTagWriter(new Mock<IProcessRunner>().Object, null!)))
+        => ((Action)(() => _ = new FlacTagWriter(new Mock<IProcessRunner>().Object, DefaultResolver(), null!)))
             .Should().Throw<ArgumentNullException>();
+
+    // ---- resolver-driven tests (T12) --------------------------------------
+
+    [Fact]
+    public async Task WriteAsync_ResolverNotFound_ThrowsFlacNotAvailableException()
+    {
+        // When the resolver returns NotFound, the writer should throw rather than
+        // silently produce a 'tag-tool-missing' sidecar — callers (CompositeTagWriter
+        // / FileProcessor in T13) translate the exception into pipeline policy.
+        var runner = RunnerReturning(0);
+        var sut = Build(runner, NotFoundResolver());
+
+        Func<Task> act = () => sut.WriteAsync("/tmp/x.flac", new SongInfo(1, "t", new[] { "a" }), CancellationToken.None);
+
+        await act.Should().ThrowAsync<FlacNotAvailableException>();
+    }
+
+    [Fact]
+    public async Task WriteAsync_UsesResolvedMetaflacPath_NotHardcodedString()
+    {
+        // Verify the process runner receives the resolver-supplied path. This is
+        // the core T12 contract: no more hardcoded "metaflac" literal in production code.
+        const string ResolvedPath = "/opt/homebrew/bin/metaflac";
+        string? capturedExe = null;
+        var runner = new Mock<IProcessRunner>();
+        runner.Setup(r => r.RunAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+              .Callback<string, IReadOnlyList<string>, CancellationToken>((exe, _, _) => capturedExe = exe)
+              .ReturnsAsync(new ProcessResult(0, "", ""));
+        var sut = Build(runner, DefaultResolver(metaflacPath: ResolvedPath));
+
+        await sut.WriteAsync("/tmp/x.flac", new SongInfo(1, "t", new[] { "a" }), CancellationToken.None);
+
+        capturedExe.Should().Be(ResolvedPath);
+    }
 }

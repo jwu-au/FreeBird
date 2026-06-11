@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FreeBird.Core.Abstractions;
 using FreeBird.Core.Metadata;
+using FreeBird.Core.Provisioning;
 using Serilog;
 
 namespace FreeBird.Core.Tagging;
@@ -15,42 +16,55 @@ namespace FreeBird.Core.Tagging;
 /// rare cases, breaking PCM-MD5 integrity checks. <c>metaflac --set-tag</c> is
 /// proven-safe (it only rewrites the metadata block). See spec §6 Q6.
 ///
+/// The metaflac binary path is obtained via <see cref="IFlacBinaryResolver"/>;
+/// if the resolver cannot locate a binary, a <see cref="FlacNotAvailableException"/>
+/// is thrown. Callers (T13: CompositeTagWriter / FileProcessor) translate the
+/// exception into pipeline policy (sidecar reason / WARN / hard fail).
+///
 /// This class is NOT directly DI-bound as <see cref="ITagWriter"/> \u2014 the
 /// <see cref="CompositeTagWriter"/> (T17) dispatches to it by file extension.
 /// Registered as a concrete <c>SingleInstance</c> via the assembly scan.
 /// </summary>
 public sealed class FlacTagWriter : IFlacTagWriter, IDependency
 {
-    private const string MetaflacExe = "metaflac";
-
     private readonly IProcessRunner _runner;
+    private readonly IFlacBinaryResolver _resolver;
     private readonly ILogger _log;
 
-    public FlacTagWriter(IProcessRunner runner, ILogger log)
+    public FlacTagWriter(IProcessRunner runner, IFlacBinaryResolver resolver, ILogger log)
     {
         ArgumentNullException.ThrowIfNull(runner);
+        ArgumentNullException.ThrowIfNull(resolver);
         ArgumentNullException.ThrowIfNull(log);
         _runner = runner;
+        _resolver = resolver;
         _log = log.ForContext<FlacTagWriter>();
     }
 
     /// <summary>
     /// Write tags to <paramref name="filePath"/>. Returns a closed-union result
-    /// describing success or failure. Never throws for subprocess failures \u2014
-    /// missing <c>metaflac</c>, non-zero exit, and I/O errors are all mapped to
-    /// <see cref="TagWriteResult.Failed"/> with a distinct <c>SidecarReason</c>.
+    /// describing subprocess outcomes (success / non-zero exit / I/O error).
+    /// Throws <see cref="FlacNotAvailableException"/> when the resolver cannot locate
+    /// metaflac — callers decide whether to degrade to a sidecar or hard-fail.
     /// </summary>
     public async Task<TagWriteResult> WriteAsync(string filePath, SongInfo song, CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
         ArgumentNullException.ThrowIfNull(song);
 
+        var metaflacResolution = await _resolver.ResolveMetaflacAsync(ct).ConfigureAwait(false);
+        if (!metaflacResolution.IsAvailable)
+        {
+            throw new FlacNotAvailableException(
+                "metaflac binary not available for FLAC tag write");
+        }
+
         var args = BuildArgs(filePath, song);
 
         ProcessResult result;
         try
         {
-            result = await _runner.RunAsync(MetaflacExe, args, ct).ConfigureAwait(false);
+            result = await _runner.RunAsync(metaflacResolution.Path!, args, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -58,8 +72,9 @@ public sealed class FlacTagWriter : IFlacTagWriter, IDependency
         }
         catch (System.ComponentModel.Win32Exception)
         {
-            // metaflac binary not on PATH \u2014 user installed FreeBird without flac.
-            _log.Warning("metaflac not found on PATH; cannot write FLAC tags for {Path}", filePath);
+            // Defensive: resolver verified File.Exists, but the binary may have been
+            // deleted between resolve and exec (race or AV quarantine on Windows).
+            _log.Warning("metaflac failed to launch; cannot write FLAC tags for {Path}", filePath);
             return new TagWriteResult.Failed("tag-tool-missing");
         }
         catch (Exception ex)
