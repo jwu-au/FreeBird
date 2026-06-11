@@ -37,9 +37,9 @@ public sealed record ScanOptions(
 
     /// <summary>
     /// Write metadata tags into the decoded file (ID3/Vorbis/MP4). Maps to
-    /// <c>--write-tags</c>. Default: <c>false</c>.
+    /// <c>--write-tags</c>. Default: <c>true</c> (opt-out via <c>--no-write-tags</c>).
     /// </summary>
-    public bool WriteTags { get; init; } = false;
+    public bool WriteTags { get; init; } = true;
 }
 
 /// <summary>

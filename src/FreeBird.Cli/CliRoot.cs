@@ -84,7 +84,15 @@ public static class CliRoot
 
         var writeTagsOpt = new Option<bool>("--write-tags")
         {
-            Description = "Write metadata tags into decoded audio files.",
+            Description = "Write metadata tags (artist/title/album) into decoded audio files. Default: true.",
+            DefaultValueFactory = _ => true,
+        };
+
+        // v3.3: opt-out alias for --write-tags. If true, suppresses tag writing
+        // even when --write-tags would otherwise default to true.
+        var noWriteTagsOpt = new Option<bool>("--no-write-tags")
+        {
+            Description = "Disable tag writing (overrides default --write-tags=true).",
         };
 
         // T11 — v3.1 flac provisioning flags (consumed in T15 by ScanRunner/WatchRunner via FlacOptionsBinder).
@@ -108,7 +116,7 @@ public static class CliRoot
             "Decode all .uc/.uc! files in <input-dir>, write decoded audio to --output.")
         {
             inputArg, outputOpt, integrityOpt, concurrencyOpt, collisionOpt, verboseOpt, quietOpt,
-            namingTemplateOpt, offlineOpt, apiTimeoutOpt, apiRateLimitOpt, writeTagsOpt,
+            namingTemplateOpt, offlineOpt, apiTimeoutOpt, apiRateLimitOpt, writeTagsOpt, noWriteTagsOpt,
             flacBinOpt, flacUrlOpt, noAutoDownloadOpt,
         };
 
@@ -125,7 +133,9 @@ public static class CliRoot
             var offline = parseResult.GetValue(offlineOpt);
             var apiTimeout = parseResult.GetValue(apiTimeoutOpt);
             var apiRateLimit = parseResult.GetValue(apiRateLimitOpt);
-            var writeTags = parseResult.GetValue(writeTagsOpt);
+            // v3.3: combine --write-tags (default true) with --no-write-tags opt-out.
+            // --no-write-tags suppresses tag writing regardless of --write-tags value.
+            var writeTags = parseResult.GetValue(writeTagsOpt) && !parseResult.GetValue(noWriteTagsOpt);
             // T15: flac provisioning flags routed through FlacOptionsBinder inside ScanRunner.
             var flacBin = parseResult.GetValue(flacBinOpt);
             var flacUrl = parseResult.GetValue(flacUrlOpt);

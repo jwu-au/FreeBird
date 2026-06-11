@@ -28,7 +28,7 @@ public sealed class WatchOptions
     public bool Offline { get; init; }
     public int ApiTimeoutSeconds { get; init; } = MetadataDefaults.ApiTimeoutSeconds;
     public int ApiRateLimit { get; init; } = MetadataDefaults.ApiRateLimit;
-    public bool WriteTags { get; init; }
+    public bool WriteTags { get; init; } = true;
 
     // T15 — v3.1 flac provisioning flags. Consumed by WatchRunner via FlacOptionsBinder
     // to override the default FlacResolverOptions in the Autofac container.

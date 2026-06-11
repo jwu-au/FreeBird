@@ -53,7 +53,7 @@ public static class ScanRunner
         bool offline = false,
         int apiTimeoutSeconds = MetadataDefaults.ApiTimeoutSeconds,
         int apiRateLimit = MetadataDefaults.ApiRateLimit,
-        bool writeTags = false,
+        bool writeTags = true,
         string? flacBin = null,
         string? flacUrl = null,
         bool noAutoDownload = false,
