@@ -20,9 +20,12 @@ public class FlacBinaryResolverTests
         public string? FlacOverride;
         public string? MetaflacOverride;
         public Dictionary<string, string> PathHits = new();
+        public string? AutoInstallUrl;
+        public bool DisableAutoInstall;
+        public Action<Mock<IFlacAutoInstaller>>? ConfigureInstaller;
     }
 
-    private static FlacBinaryResolver Build(Action<MockSetup>? configure = null)
+    private static (FlacBinaryResolver resolver, Mock<IFlacAutoInstaller> installer) BuildWithInstaller(Action<MockSetup>? configure = null)
     {
         var setup = new MockSetup();
         configure?.Invoke(setup);
@@ -34,16 +37,28 @@ public class FlacBinaryResolverTests
             .Setup(p => p.FindOnPath(It.IsAny<string>()))
             .Returns((string exeName) => setup.PathHits.TryGetValue(exeName, out var hit) ? hit : null);
 
+        var installer = new Mock<IFlacAutoInstaller>();
+        // Default: behave like NoOp (NotSupported) so existing probe-order tests don't accidentally trigger install.
+        installer
+            .Setup(i => i.InstallAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FlacInstallResult.NotSupported.Instance);
+        setup.ConfigureInstaller?.Invoke(installer);
+
         var options = new FlacResolverOptions
         {
             AppBaseDirectory = setup.BaseDir,
             FlacBinOverride = setup.FlacOverride,
             MetaflacBinOverride = setup.MetaflacOverride,
+            AutoInstallUrl = setup.AutoInstallUrl,
+            DisableAutoInstall = setup.DisableAutoInstall,
         };
 
         var log = new Mock<ILogger>().Object;
-        return new FlacBinaryResolver(fs, pathEnv.Object, options, log);
+        return (new FlacBinaryResolver(fs, pathEnv.Object, installer.Object, options, log), installer);
     }
+
+    private static FlacBinaryResolver Build(Action<MockSetup>? configure = null)
+        => BuildWithInstaller(configure).resolver;
 
     // ---------------- Probe order: flac ----------------
 
@@ -223,6 +238,148 @@ public class FlacBinaryResolverTests
         var result = await r.ResolveFlacAsync(CancellationToken.None);
 
         result.IsAvailable.Should().BeFalse();
+    }
+
+    // ---------------- Auto-install delegation (T03) ----------------
+
+    [Fact]
+    public async Task ResolveFlac_MissAndNoUrl_ReturnsNotFound_NoInstallAttempt()
+    {
+        var (r, installer) = BuildWithInstaller();  // no URL
+
+        var result = await r.ResolveFlacAsync(CancellationToken.None);
+
+        result.IsAvailable.Should().BeFalse();
+        installer.Verify(
+            i => i.InstallAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ResolveFlac_MissWithDisableFlag_ReturnsNotFound_NoInstallAttempt()
+    {
+        var (r, installer) = BuildWithInstaller(s =>
+        {
+            s.AutoInstallUrl = "https://x/flac.zip";
+            s.DisableAutoInstall = true;
+        });
+
+        var result = await r.ResolveFlacAsync(CancellationToken.None);
+
+        result.IsAvailable.Should().BeFalse();
+        installer.Verify(
+            i => i.InstallAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ResolveFlac_MissWithUrl_CallsInstaller_AndReturnsInstalledPath()
+    {
+        var (r, installer) = BuildWithInstaller(s =>
+        {
+            s.BaseDir = "/app";
+            s.AutoInstallUrl = "https://x/flac.zip";
+            s.ConfigureInstaller = mock => mock
+                .Setup(i => i.InstallAsync("/app", "https://x/flac.zip", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new FlacInstallResult.Installed("/app/flac", "/app/metaflac"));
+        });
+
+        var result = await r.ResolveFlacAsync(CancellationToken.None);
+
+        result.Path.Should().Be("/app/flac");
+        result.Provenance.Should().Be(FlacBinaryProvenance.NextToExecutable);
+        installer.Verify(
+            i => i.InstallAsync("/app", "https://x/flac.zip", It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task ResolveMetaflac_MissWithUrl_InstallReturnsBothPaths_ReturnsMetaflacPath()
+    {
+        var (r, _) = BuildWithInstaller(s =>
+        {
+            s.AutoInstallUrl = "https://x/flac.zip";
+            s.ConfigureInstaller = mock => mock
+                .Setup(i => i.InstallAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new FlacInstallResult.Installed("/app/flac", "/app/metaflac"));
+        });
+
+        var result = await r.ResolveMetaflacAsync(CancellationToken.None);
+
+        result.Path.Should().Be("/app/metaflac");
+        result.Provenance.Should().Be(FlacBinaryProvenance.NextToExecutable);
+    }
+
+    [Fact]
+    public async Task ResolveFlac_InstallNotSupported_ReturnsNotFound()
+    {
+        var (r, _) = BuildWithInstaller(s =>
+        {
+            s.AutoInstallUrl = "https://x/flac.zip";
+            s.ConfigureInstaller = mock => mock
+                .Setup(i => i.InstallAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(FlacInstallResult.NotSupported.Instance);
+        });
+
+        var result = await r.ResolveFlacAsync(CancellationToken.None);
+
+        result.IsAvailable.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ResolveFlac_InstallFailed_ReturnsNotFound()
+    {
+        var (r, _) = BuildWithInstaller(s =>
+        {
+            s.AutoInstallUrl = "https://x/flac.zip";
+            s.ConfigureInstaller = mock => mock
+                .Setup(i => i.InstallAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new FlacInstallResult.Failed("network down"));
+        });
+
+        var result = await r.ResolveFlacAsync(CancellationToken.None);
+
+        result.IsAvailable.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ResolveFlac_ProbeHits_NeverCallsInstaller()
+    {
+        var (r, installer) = BuildWithInstaller(s =>
+        {
+            s.Files["/app/flac"] = new MockFileData("");
+            s.AutoInstallUrl = "https://x/flac.zip";  // even with URL, probe hit short-circuits
+        });
+
+        var result = await r.ResolveFlacAsync(CancellationToken.None);
+
+        result.IsAvailable.Should().BeTrue();
+        installer.Verify(
+            i => i.InstallAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ResolveFlac_HonorsCancellation_PropagatesToInstaller()
+    {
+        using var cts = new CancellationTokenSource();
+        var (r, installer) = BuildWithInstaller(s =>
+        {
+            s.AutoInstallUrl = "https://x/flac.zip";
+            s.ConfigureInstaller = mock => mock
+                .Setup(i => i.InstallAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(FlacInstallResult.Disabled.Instance);
+        });
+        cts.Cancel();
+
+        await r.ResolveFlacAsync(cts.Token);
+
+        installer.Verify(
+            i => i.InstallAsync(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.Is<CancellationToken>(c => c.IsCancellationRequested)),
+            Times.Once);
     }
 }
 

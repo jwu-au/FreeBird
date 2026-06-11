@@ -12,42 +12,48 @@ namespace FreeBird.Core.Provisioning;
 /// Probe order (first hit wins):
 ///   1. CLI override (<c>--flac-bin</c> / <c>--metaflac-bin</c>) via <see cref="FlacResolverOptions"/>.
 ///   2. <c>&lt;AppContext.BaseDirectory&gt;/flac{.exe}</c> — covers both the bundled
-///      binary shipped next to <c>fb</c> and a binary auto-downloaded by T03's
+///      binary shipped next to <c>fb</c> and a binary auto-downloaded by the
 ///      installer.
 ///   3. PATH lookup via <see cref="IPathEnvironment"/>.
+///   4. Auto-install via <see cref="IFlacAutoInstaller"/> (Windows only;
+///      NoOp on macOS/Linux). Skipped if <see cref="FlacResolverOptions.DisableAutoInstall"/>
+///      is true or <see cref="FlacResolverOptions.AutoInstallUrl"/> is null/empty.
 ///
-/// Returns <see cref="FlacResolution.NotFound"/> when none of the three locate
-/// the binary. No auto-install is attempted here; that delegation lands in T03.
-/// No version check is performed — the design accepts whatever the user has.
+/// Returns <see cref="FlacResolution.NotFound"/> when none of the steps locate
+/// the binary. No version check is performed — the design accepts whatever the user has.
 /// </summary>
 public sealed class FlacBinaryResolver : IFlacBinaryResolver
 {
     private readonly IFileSystem _fs;
     private readonly IPathEnvironment _pathEnv;
+    private readonly IFlacAutoInstaller _autoInstaller;
     private readonly FlacResolverOptions _options;
     private readonly ILogger _log;
 
     public FlacBinaryResolver(
         IFileSystem fs,
         IPathEnvironment pathEnv,
+        IFlacAutoInstaller autoInstaller,
         FlacResolverOptions options,
         ILogger log)
     {
         _fs = fs ?? throw new ArgumentNullException(nameof(fs));
         _pathEnv = pathEnv ?? throw new ArgumentNullException(nameof(pathEnv));
+        _autoInstaller = autoInstaller ?? throw new ArgumentNullException(nameof(autoInstaller));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _log = log ?? throw new ArgumentNullException(nameof(log));
     }
 
     public Task<FlacResolution> ResolveFlacAsync(CancellationToken ct)
-        => Task.FromResult(Resolve("flac", _options.FlacBinOverride));
+        => ResolveAsync("flac", ct);
 
     public Task<FlacResolution> ResolveMetaflacAsync(CancellationToken ct)
-        => Task.FromResult(Resolve("metaflac", _options.MetaflacBinOverride));
+        => ResolveAsync("metaflac", ct);
 
-    private FlacResolution Resolve(string baseName, string? overridePath)
+    private async Task<FlacResolution> ResolveAsync(string baseName, CancellationToken ct)
     {
         var exeName = OperatingSystem.IsWindows() ? $"{baseName}.exe" : baseName;
+        var overridePath = baseName == "flac" ? _options.FlacBinOverride : _options.MetaflacBinOverride;
 
         // 1. CLI override
         if (!string.IsNullOrEmpty(overridePath))
@@ -80,7 +86,42 @@ public sealed class FlacBinaryResolver : IFlacBinaryResolver
             return new FlacResolution(pathHit, FlacBinaryProvenance.Path);
         }
 
-        _log.Debug("{Bin} not found via override, next-to-exe, or PATH", baseName);
+        // 4. Auto-install fallback (Windows-only impl; NoOp returns NotSupported elsewhere)
+        if (_options.DisableAutoInstall)
+        {
+            _log.Debug("{Bin} not found; auto-install disabled by option", baseName);
+            return FlacResolution.NotFound;
+        }
+
+        if (string.IsNullOrEmpty(_options.AutoInstallUrl))
+        {
+            _log.Debug("{Bin} not found; no AutoInstallUrl configured", baseName);
+            return FlacResolution.NotFound;
+        }
+
+        _log.Information("flac not found; attempting auto-install from {Url}", _options.AutoInstallUrl);
+        var installResult = await _autoInstaller
+            .InstallAsync(_options.AppBaseDirectory, _options.AutoInstallUrl, ct)
+            .ConfigureAwait(false);
+
+        return installResult switch
+        {
+            FlacInstallResult.Installed inst => baseName == "flac"
+                ? new FlacResolution(inst.FlacPath, FlacBinaryProvenance.NextToExecutable)
+                : new FlacResolution(inst.MetaflacPath, FlacBinaryProvenance.NextToExecutable),
+            FlacInstallResult.NotSupported => LogAndReturnNotFound(
+                baseName,
+                "platform does not support auto-install (macOS/Linux); install flac via brew or apt"),
+            FlacInstallResult.Disabled => LogAndReturnNotFound(baseName, "auto-install disabled"),
+            FlacInstallResult.Failed f => LogAndReturnNotFound(baseName, $"auto-install failed: {f.Reason}"),
+            _ => throw new InvalidOperationException(
+                $"Unhandled FlacInstallResult: {installResult.GetType().Name}"),
+        };
+    }
+
+    private FlacResolution LogAndReturnNotFound(string baseName, string reason)
+    {
+        _log.Debug("{Bin} not found via probe; {Reason}", baseName, reason);
         return FlacResolution.NotFound;
     }
 }
@@ -105,4 +146,18 @@ public sealed record FlacResolverOptions
     /// Directory next to the fb executable. Typically <see cref="AppContext.BaseDirectory"/>.
     /// </summary>
     public required string AppBaseDirectory { get; init; }
+
+    /// <summary>
+    /// Download URL passed to <see cref="IFlacAutoInstaller"/> when probe steps miss.
+    /// Resolution order (CLI flag &gt; env var &gt; hardcoded default) is performed by the caller.
+    /// When null/empty, the resolver skips the auto-install step entirely.
+    /// </summary>
+    public string? AutoInstallUrl { get; init; }
+
+    /// <summary>
+    /// When true, the resolver will NOT invoke <see cref="IFlacAutoInstaller"/> even on
+    /// platforms that support it. Maps to the <c>--no-auto-download</c> CLI flag /
+    /// <c>FREEBIRD_NO_AUTO_DOWNLOAD</c> env var.
+    /// </summary>
+    public bool DisableAutoInstall { get; init; } = false;
 }
