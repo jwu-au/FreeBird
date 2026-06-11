@@ -348,6 +348,7 @@ No files in the input directory are ever modified or deleted.
 - Windows auto-download requires write access to the `fb.exe` directory (typically true for user installs; system-wide installs to `Program Files` require admin or `--no-auto-download`).
 - Auto-download URL and SHA are pinned to Xiph FLAC 1.5.0. Newer FLAC versions on PATH still work; the auto-download is just for the bundled-fallback case.
 - `fb install-flac` on macOS/Linux only prints package-manager hints (no auto-install) to respect upstream maintainer-managed installs.
+- **Upgrading from v3.0.x or v3.1.x**: If `.freebird-failed/` contains old sidecars from previous versions, they will be silently ignored (no crash). To regenerate them with the new stem-based naming, optionally run `rm -rf .freebird-failed/` once after upgrading.
 
 ---
 

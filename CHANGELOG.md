@@ -5,6 +5,24 @@ All notable changes to FreeBird are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] — 2026-06-11
+
+### Fixed
+- **Watch mode infinite retry bug**: Files that permanently fail integrity check (e.g., partial downloads failing `flac -t`) are no longer re-decoded on every watch poll cycle. The root cause was a naming asymmetry: `FileProcessor` quarantined as `{musicId}.{ext}` but `FilesystemSkipDecider` globbed for `{stem}.*.txt`. Fix harmonizes `FileProcessor` to use stem-naming, matching the sibling `UnknownFormat` path. (`f9e9ff7`)
+- **Multi-bitrate musicId collision**: Same musicId with different bitrates (e.g., standard + lossless of the same song) now produce distinct quarantine artifacts instead of overwriting each other. (`f9e9ff7`)
+
+### Changed
+- **BREAKING (quarantine filename schema)**: `.freebird-failed/` files for IntegrityFailed cases are now stem-named (`{musicId}-_-_{bitrate}-_-_{md5hash}.{ext}`) instead of musicId-only (`{musicId}.{ext}`). Old sidecars from v3.0.x–3.1.x will simply be ignored (no crash, no infinite loop). Optional cleanup: `rm -rf .freebird-failed/` once after upgrading.
+- Sidecar files now include a `version: 3` line for forward-compatibility detection. (`09a79bd`)
+
+### Internal
+- Added 3 regression tests for the quarantine naming behavior (unit + E2E coverage). (`2e6549b`, `eb3bd82`, `d23f6dd`)
+- Added `Version` property to `SidecarRecord` (nullable int; null for legacy v2 sidecars).
+
+### Migration notes (for users upgrading from v3.0.x or v3.1.x)
+- No data migration required. v3.2.0 ignores old musicId-named sidecars; they simply won't trigger skip behavior. New IntegrityFailed quarantines write the new stem-named format.
+- **Optional**: If `.freebird-failed/` contains a large number of old sidecars and you want the skip behavior immediately, run `rm -rf .freebird-failed/` and let watch regenerate.
+
 ## [3.1.0] — 2026-06-11
 
 ### Added
