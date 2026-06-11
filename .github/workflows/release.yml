@@ -1,0 +1,137 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to backfill (e.g., v3.1.0)'
+        required: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+            ext: zip
+          - os: macos-latest
+            rid: osx-arm64
+            ext: tar.gz
+          - os: ubuntu-22.04
+            rid: linux-x64
+            ext: tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - run: dotnet restore
+      - run: dotnet build --no-restore -c Release   # sanity step (Q11+)
+
+      - name: Publish
+        run: |
+          dotnet publish src/FreeBird.Cli/FreeBird.Cli.csproj \
+            -c Release -r ${{ matrix.rid }} \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:IncludeNativeLibrariesForSelfExtract=true \
+            -o publish/${{ matrix.rid }}
+
+      - name: Determine version (strip leading v)
+        id: ver
+        shell: bash
+        run: |
+          REF="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Package (Windows zip)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $items = @("publish/${{ matrix.rid }}/fb.exe", "README.md", "CHANGELOG.md")
+          if (Test-Path "LICENSE") { $items += "LICENSE" }
+          Compress-Archive -Path $items -DestinationPath "freebird-${{ steps.ver.outputs.version }}-${{ matrix.rid }}.zip"
+
+      - name: Package (Unix tar.gz)
+        if: matrix.os != 'windows-latest'
+        run: |
+          chmod +x publish/${{ matrix.rid }}/fb
+          STAGE=$(mktemp -d)
+          cp publish/${{ matrix.rid }}/fb "$STAGE/"
+          cp README.md "$STAGE/"
+          cp CHANGELOG.md "$STAGE/"
+          [ -f LICENSE ] && cp LICENSE "$STAGE/" || true
+          tar czf "freebird-${{ steps.ver.outputs.version }}-${{ matrix.rid }}.tar.gz" -C "$STAGE" .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: freebird-${{ steps.ver.outputs.version }}-${{ matrix.rid }}
+          path: "freebird-${{ steps.ver.outputs.version }}-${{ matrix.rid }}.${{ matrix.ext }}"
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Extract CHANGELOG section
+        id: notes
+        run: |
+          REF="${{ github.event.inputs.tag || github.ref_name }}"
+          VER="${REF#v}"
+          awk -v v="$VER" 'BEGIN{p=0} /^## \[/{if(p) exit; if(index($0, "[" v "]")) p=1; next} p {print}' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "(CHANGELOG section for $VER not found; will use auto-generated notes)" > release-notes.md
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "fallback=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Detect prerelease
+        id: prerelease
+        run: |
+          REF="${{ github.event.inputs.tag || github.ref_name }}"
+          if echo "$REF" | grep -qE 'v[0-9]+\.[0-9]+\.[0-9]+-(rc|beta|alpha)'; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: ${{ github.event.inputs.tag || github.ref_name }}
+          body_path: release-notes.md
+          generate_release_notes: ${{ steps.notes.outputs.fallback == 'true' }}
+          draft: true
+          prerelease: ${{ steps.prerelease.outputs.is_prerelease == 'true' }}
+          files: artifacts/*
