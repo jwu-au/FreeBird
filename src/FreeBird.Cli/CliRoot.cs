@@ -144,6 +144,7 @@ public static class CliRoot
         {
             scanCommand,
             WatchCommand.Build(),
+            InstallFlacCommand.Build(),
         };
 
         return root;
