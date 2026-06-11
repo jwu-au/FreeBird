@@ -74,7 +74,9 @@ public sealed class FlacTagWriterTests
         var args = FlacTagWriter.BuildArgs("/tmp/x.flac", song);
 
         args.Should().Equal(
-            "--remove-all-tags",
+            "--remove-tag=ARTIST",
+            "--remove-tag=TITLE",
+            "--remove-tag=ALBUM",
             "--set-tag=ARTIST=Artist",
             "--set-tag=TITLE=Title",
             "--set-tag=ALBUM=Album",
@@ -208,7 +210,7 @@ public sealed class FlacTagWriterTests
 
         capturedExe.Should().Be("metaflac");
         capturedArgs.Should().NotBeNull();
-        capturedArgs!.Should().StartWith(new[] { "--remove-all-tags" });
+        capturedArgs!.Should().StartWith(new[] { "--remove-tag=ARTIST", "--remove-tag=TITLE", "--remove-tag=ALBUM" });
         capturedArgs.Should().EndWith(new[] { "/tmp/x.flac" });
     }
 

@@ -95,19 +95,25 @@ public sealed class FlacTagWriter : IFlacTagWriter, IDependency
     }
 
     /// <summary>
-    /// Build the metaflac argument list. Always clears existing tags first
-    /// (<c>--remove-all-tags</c>) to keep writes idempotent across re-runs;
-    /// then sets ARTIST / TITLE / ALBUM. Multi-artist songs join with '/'
-    /// (industry-standard for Vorbis ARTIST multi-value per spec Q4).
+    /// Build the metaflac argument list. Clears existing ARTIST/TITLE/ALBUM
+    /// tags (via per-key <c>--remove-tag</c>) before setting new values —
+    /// idempotent for our 3 target keys while preserving unrelated
+    /// VorbisComments like GENRE/DATE/REPLAYGAIN_*. Multi-artist songs join
+    /// with '/' (industry-standard for Vorbis ARTIST multi-value per spec Q4).
     ///
     /// The trailing path is the LAST argument, matching <c>metaflac</c>'s
     /// option-then-file calling convention.
     /// </summary>
     internal static IReadOnlyList<string> BuildArgs(string filePath, SongInfo song)
     {
-        var args = new List<string>(capacity: 6)
+        var args = new List<string>(capacity: 7)
         {
-            "--remove-all-tags",
+            // v3.3: per-key remove (instead of --remove-all-tags) so that user-curated
+            // VorbisComments like GENRE/DATE/REPLAYGAIN_*/ENCODER are preserved across
+            // re-runs. Still idempotent for our 3 target keys.
+            "--remove-tag=ARTIST",
+            "--remove-tag=TITLE",
+            "--remove-tag=ALBUM",
             "--set-tag=ARTIST=" + JoinArtists(song.Artists),
             "--set-tag=TITLE=" + song.Title,
         };
