@@ -5,6 +5,39 @@ All notable changes to FreeBird are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1] — 2026-06-11
+
+### Fixed
+- `fb watch` no longer loops forever re-decoding files whose musicId-named output
+  already exists (the v2 → v3 upgrade case) or whose NetEase API call returned
+  NotFound (the intermittent-failure case). Both modes caused ~12 NetEase API
+  calls per file per minute at the default poll interval. Fix: a JSON resolution
+  marker at `<output>/.freebird-resolved/<source_stem>.json` records every
+  (non-offline) resolution attempt with freshness keys (source size + mtime),
+  the resolved filename, the naming template used, and (for failures) a
+  reason-differentiated `retry_after` timestamp.
+- Multi-bitrate caches (two `.uc!` files sharing one NetEase musicId) are now
+  each tracked independently via per-source-stem markers; the higher-bitrate
+  file wins under default `--on-collision Overwrite`.
+
+### Removed (BREAKING for users with automation that parses `.flac.txt`)
+- The `<output>.flac.txt` audit sidecar introduced in v3.0.0 (T18) is no longer
+  written. All audit fields (format, integrity, reason, source path, source
+  size/mtime, resolved-at, template used, source stem, music id) are now
+  consolidated in the per-source-stem JSON marker under `.freebird-resolved/`.
+  Existing `.flac.txt` files on disk are harmless leftovers; delete at leisure.
+  If you have automation that parses them, migrate to reading the JSON markers.
+
+### Internal
+- `FilesystemSkipDecider` gains Branch 3b (marker-aware short-circuit) between
+  the existing Branch 3a (stem-equals-output) and Branch 3c (bootstrap re-decode);
+  the bootstrap log line is demoted from INF to DBG.
+- Retry intervals (hardcoded; CLI override considered for v3.1):
+  `metadata-fetch-failed` = 1h, `metadata-empty` = 7d, `metadata-deserialize-failed` = 24h.
+- Bootstrap pass respects existing `--concurrency` and `--api-rate-limit` knobs;
+  no special throttle. Users with large caches should expect a one-time
+  multi-minute first poll after upgrade.
+
 ## [3.0.0] — 2026-06-10
 
 ### ⚠️ BREAKING
