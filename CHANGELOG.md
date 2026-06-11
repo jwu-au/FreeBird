@@ -5,6 +5,26 @@ All notable changes to FreeBird are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0] — 2026-06-11
+
+### Changed
+- **BREAKING (default behavior): `--write-tags` now defaults to `true`** (was `false` in v3.0.x–3.2.x). Filename naming has always used resolved metadata; embedded tags now match by default. Users who relied on the previous opt-in behavior must add `--no-write-tags` (or `--write-tags=false`) to preserve tag-preservation. (`97fb207`)
+- **FLAC tag write: per-key remove (preserves unrelated tags)**: `FlacTagWriter` no longer uses `metaflac --remove-all-tags`; instead it explicitly removes only ARTIST/TITLE/ALBUM before writing the resolved values. User-curated tags like GENRE, DATE, TRACKNUMBER, REPLAYGAIN_*, COMMENT, ENCODER are now preserved across `fb scan` re-runs. (`04d924e`)
+- README and `--help` text updated to reflect default behavior and document the new `--no-write-tags` opt-out flag.
+
+### Added
+- New CLI flag `--no-write-tags` on both `scan` and `watch` (opt-out alias for `--write-tags=false`).
+
+### Internal
+- Added empirical `FlacTagWriter_PreservesUnrelatedTags_*` integration test (real `metaflac` subprocess; zero mocks) to lock in the per-key remove contract. (`4ec95c2`)
+- Added `Scan_NoWriteTagsFlag_DisablesTagWriting` and `Watch_NoWriteTagsFlag_DisablesTagWriting` CLI tests for the opt-out flag.
+- Audited 3 Core `FileProcessorTests` for stale `// WriteTags = false by default` assumption; injected explicit `with { WriteTags = false }` opt-out to preserve original test intent.
+
+### Migration notes (for users upgrading from v3.0.x–3.2.x)
+- **If your scripts/cron jobs invoke `fb scan` or `fb watch` and you do NOT want tag writing**: add `--no-write-tags` to those invocations.
+- **If you want tag writing** (the new default): no change needed. Just upgrade.
+- The new default still requires `metaflac` for FLAC tag writes; if `metaflac` is missing, FLAC tag write is silently skipped (recorded in sidecar as `tag-tool-missing`) — same fail-soft behavior as before.
+
 ## [3.2.0] — 2026-06-11
 
 ### Fixed

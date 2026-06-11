@@ -21,7 +21,7 @@ One-sweep CLI to decrypt NetEase Cloud Music `.uc` / `.uc!` cache files (XOR `0x
 
 ## What's new in v3
 
-v3 adds **NetEase API–driven naming** and **optional tag-writing** to the decoder pipeline.
+v3 adds **NetEase API–driven naming** and **default-on tag-writing** (v3.3+; opt-out via `--no-write-tags`) to the decoder pipeline.
 
 ### Filename rendering from real metadata
 
@@ -57,20 +57,25 @@ All five flags are available on both `fb scan` and `fb watch`:
 | `--offline` | switch | `false` | Skip NetEase API; use musicId fallback naming. |
 | `--api-timeout` | int (seconds) | `10` | NetEase API request timeout (range 1–300). |
 | `--api-rate-limit` | int (req/sec) | `0` | Max NetEase API calls per second (0–100, 0 = unlimited). |
-| `--write-tags` | switch | `false` | Write metadata tags into decoded audio files. |
+| `--write-tags` | switch | **`true`** | Write metadata tags (ARTIST/TITLE/ALBUM) into decoded audio files. (v3.3+) |
+| `--no-write-tags` | switch | `false` | Disable tag writing (opt-out from default `--write-tags=true`). (v3.3+) |
 
 For exact descriptions and defaults, see `fb scan --help` / `fb watch --help`.
 
-### Tag-writing (optional)
+### Tag-writing (on by default since v3.3)
 
-`--write-tags` embeds the resolved metadata into the decoded audio:
+FreeBird embeds the resolved metadata into the decoded audio. Tag writing is
+**on by default** (`--write-tags`, since v3.3); pass `--no-write-tags` to disable.
 
-- **FLAC** — written via `metaflac` (install with `brew install flac` on macOS, `apt install flac` on Debian/Ubuntu).
+- **FLAC** — written via `metaflac` (install with `brew install flac` on macOS, `apt install flac` on Debian/Ubuntu). Existing tags like GENRE, DATE, TRACKNUMBER, REPLAYGAIN_*, COMMENT, ENCODER are **preserved** (only ARTIST/TITLE/ALBUM are replaced).
 - **MP3** — ID3v2.3 tags written natively (no external tool required).
 - **M4A** — iTunes-style atoms written natively.
 
 Tags written: ARTIST, TITLE, ALBUM. If metadata resolution falls back to musicId,
 no tags are written for that file (the sidecar still records the reason).
+
+If `metaflac` is missing (FLAC tag write only), tag write is silently skipped for
+FLAC files (recorded in sidecar as `tag-tool-missing`); audio output is unaffected.
 
 ### Migration from v2 (3 steps)
 
@@ -81,9 +86,10 @@ migration path:
    produces the v2-equivalent filenames (musicId-based) on your existing cache.
 2. **Drop `--offline`.** Re-run without the flag; new files are renamed from
    metadata. Existing decoded files are skipped per `--collision` policy.
-3. **Opt into tags.** Add `--write-tags` (requires `metaflac` for FLAC). Re-decodes
-   are NOT triggered automatically; you may want to delete the prior outputs and
-   re-run if you want tags on previously-decoded files.
+3. **Tags now on by default (v3.3+).** Tag writing was opt-in in v3.0–v3.2, now
+   on by default. If you want to preserve v3.2-era behavior of not writing tags,
+   pass `--no-write-tags`. Re-decodes are NOT triggered automatically; you may
+   want to delete prior outputs and re-run if you want tags on previously-decoded files.
 
 ### v3 edge cases worth knowing
 
@@ -108,7 +114,7 @@ migration path:
 - **Quarantines failures** to `.freebird-failed/` with a `.txt` sidecar capturing the reason.
 - **Skip-or-overwrite collision policy** for repeat runs.
 - **Concurrent** processing with configurable worker count.
-- **Metadata-aware naming** — renames output files from NetEase Cloud Music song-detail API; falls back to musicId on failure. Optional `--write-tags` embeds ARTIST/TITLE/ALBUM tags.
+- **Metadata-aware naming** — renames output files from NetEase Cloud Music song-detail API; falls back to musicId on failure. ARTIST/TITLE/ALBUM tags are embedded by default (v3.3+; opt-out via `--no-write-tags`); existing unrelated tags (GENRE/DATE/etc) are preserved.
 
 ---
 
@@ -341,8 +347,6 @@ No files in the input directory are ever modified or deleted.
 
 ## Limitations
 
-- **No NetEase metadata API integration** — output uses the original cache filename stem (e.g. `12345-abc.mp3`), not the song title.
-- **No ID3 tag writing** — decoded files have the same tags as the original cache (which NetEase strips before caching).
 - **`flac` binary must be on `PATH`** for L3 — no config-file override yet.
 - **No recursive directory scan** — input directory is scanned non-recursively.
 - Windows auto-download requires write access to the `fb.exe` directory (typically true for user installs; system-wide installs to `Program Files` require admin or `--no-auto-download`).
