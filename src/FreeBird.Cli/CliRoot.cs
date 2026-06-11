@@ -87,11 +87,29 @@ public static class CliRoot
             Description = "Write metadata tags into decoded audio files.",
         };
 
+        // T11 — v3.1 flac provisioning flags (consumed in T15 by ScanRunner/WatchRunner via FlacOptionsBinder).
+        var flacBinOpt = new Option<string?>("--flac-bin")
+        {
+            Description = "Explicit path to flac binary (overrides probe order).",
+        };
+
+        var flacUrlOpt = new Option<string?>("--flac-url")
+        {
+            Description = "Override download URL for Windows auto-install (advanced).",
+            Hidden = true,
+        };
+
+        var noAutoDownloadOpt = new Option<bool>("--no-auto-download")
+        {
+            Description = "Disable Windows auto-install of flac when missing.",
+        };
+
         var scanCommand = new Command("scan",
             "Decode all .uc/.uc! files in <input-dir>, write decoded audio to --output.")
         {
             inputArg, outputOpt, integrityOpt, concurrencyOpt, collisionOpt, verboseOpt, quietOpt,
             namingTemplateOpt, offlineOpt, apiTimeoutOpt, apiRateLimitOpt, writeTagsOpt,
+            flacBinOpt, flacUrlOpt, noAutoDownloadOpt,
         };
 
         scanCommand.SetAction(async (parseResult, ct) =>

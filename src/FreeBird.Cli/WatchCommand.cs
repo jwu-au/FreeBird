@@ -127,6 +127,23 @@ public static class WatchCommand
             Description = "Write metadata tags into decoded audio files.",
         };
 
+        // T11 — v3.1 flac provisioning flags (consumed in T15 by ScanRunner/WatchRunner via FlacOptionsBinder).
+        var flacBinOpt = new Option<string?>("--flac-bin")
+        {
+            Description = "Explicit path to flac binary (overrides probe order).",
+        };
+
+        var flacUrlOpt = new Option<string?>("--flac-url")
+        {
+            Description = "Override download URL for Windows auto-install (advanced).",
+            Hidden = true,
+        };
+
+        var noAutoDownloadOpt = new Option<bool>("--no-auto-download")
+        {
+            Description = "Disable Windows auto-install of flac when missing.",
+        };
+
         var watchCommand = new Command(
             "watch",
             "Continuously watch <input-dir> for new .uc/.uc! files and decode them into --output.")
@@ -149,6 +166,9 @@ public static class WatchCommand
             apiTimeoutOpt,
             apiRateLimitOpt,
             writeTagsOpt,
+            flacBinOpt,
+            flacUrlOpt,
+            noAutoDownloadOpt,
         };
 
         watchCommand.SetAction(async (parseResult, ct) =>
