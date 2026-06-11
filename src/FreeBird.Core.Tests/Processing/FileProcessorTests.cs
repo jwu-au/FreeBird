@@ -222,6 +222,72 @@ public class FileProcessorTests : IDisposable
         (await File.ReadAllTextAsync(result.OutputPath + ".txt")).Should().Contain("PCM-MD5");
     }
 
+    // --- v3.2 T01 (RED): IntegrityFailed quarantine must use SOURCE STEM, not musicId ---
+    //
+    // Bug: FileProcessor.cs:142 calls _naming.GetTargetName(..., metadata: null, ...) which under
+    // v3 MetadataAwareFileNamer falls back to "{musicId}.{ext}". The watch-mode FilesystemSkipDecider
+    // globs failed/ for "{stem}.*.txt" (see FilesystemSkipDecider.cs:160), so musicId-named sidecars
+    // never match real NetEase-format source stems and the file is re-decoded on every poll cycle.
+    //
+    // The sibling UnknownFormat path at FileProcessor.cs:115 already does the right thing using
+    // sourceStem. This test pins the fixed (stem-based) behavior; T02 will harmonize line 142.
+    [Fact]
+    public async Task Process_WhenIntegrityFailed_QuarantineFileUses_SourceStem_NotMusicId()
+    {
+        // Real NetEase cache format: <musicId>-<bitrate>-<md5hash>.uc!
+        // The stem (everything before .uc!) is what FilesystemSkipDecider globs for.
+        const string realNeteaseName = "3367798042-_-_5999-_-_a38658b6e504b7520bb4c507db13b9d2.uc!";
+        const string expectedQuarantineBasename = "3367798042-_-_5999-_-_a38658b6e504b7520bb4c507db13b9d2.flac";
+
+        var (sut, _, sniffer, naming, integrity, _, _, _) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync(realNeteaseName);
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+               .ReturnsAsync(AudioFormat.Flac);
+
+        // Simulate the v3 MetadataAwareFileNamer's metadata-null fallback: "{musicId}.{ext}".
+        // This is what the real namer returns on the IntegrityFailed path today, and it is the
+        // root cause of the bug. The fix in T02 must NOT use this name for quarantine.
+        naming.Setup(n => n.GetTargetName(
+                    ucPath,
+                    AudioFormat.Flac,
+                    It.IsAny<FreeBird.Core.Metadata.SongInfo?>(),
+                    It.IsAny<string?>()))
+              .Returns("3367798042.flac");
+
+        integrity.Setup(i => i.CheckAsync(
+                    It.IsAny<string>(),
+                    AudioFormat.Flac,
+                    It.IsAny<IntegrityLevel>(),
+                    It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Failed(IntegrityLevel.L1, "flac -t failed"));
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+
+        // (a) Outcome is IntegrityFailed
+        result.Outcome.Should().Be(ScanOutcome.IntegrityFailed);
+
+        // (b) Quarantined file path uses the SOURCE STEM (multi-bitrate safe) — NOT the bare musicId
+        var failedDir = Path.Combine(_outputDir, ".freebird-failed");
+        var expectedQuarantinePath = Path.Combine(failedDir, expectedQuarantineBasename);
+        result.OutputPath.Should().Be(
+            expectedQuarantinePath,
+            because: "IntegrityFailed quarantine MUST be named with the source stem so the watch " +
+                     "skip-decider stem-glob ({stem}.*.txt) finds the sidecar and prevents " +
+                     "infinite re-decoding (FreeBird v3.2 fix).");
+
+        // (c) Sidecar exists at OutputPath + ".txt"
+        File.Exists(result.OutputPath + ".txt").Should().BeTrue(
+            because: "Sidecar must be co-located with the quarantined file so the skip-decider " +
+                     "glob '{stem}.*.txt' matches it.");
+
+        // (d) Sanity: the buggy musicId-only quarantine path must NOT exist
+        File.Exists(Path.Combine(failedDir, "3367798042.flac")).Should().BeFalse(
+            because: "Quarantine naming must NOT fall back to '{musicId}.{ext}' — that asymmetry " +
+                     "with the skip-decider's stem-glob is exactly the bug being fixed.");
+    }
+
+
     // --- Path 6: Error (source not found) ---
 
     [Fact]
