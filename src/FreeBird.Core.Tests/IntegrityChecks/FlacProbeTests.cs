@@ -1,11 +1,6 @@
-using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Threading;
-using System.Threading.Tasks;
 using FluentAssertions;
-using FreeBird.Core.Abstractions;
 using FreeBird.Core.Integrity;
+using FreeBird.Core.Provisioning;
 using Moq;
 
 namespace FreeBird.Core.Tests.IntegrityChecks;
@@ -13,59 +8,67 @@ namespace FreeBird.Core.Tests.IntegrityChecks;
 public class FlacProbeTests
 {
     [Fact]
-    public async Task IsAvailableAsync_RunnerReturnsZeroExit_ReturnsTrue()
+    public async Task IsAvailable_ResolverFindsFlac_ReturnsTrue()
     {
-        var runner = new Mock<IProcessRunner>();
-        runner.Setup(r => r.RunAsync("flac", It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-              .ReturnsAsync(new ProcessResult(0, "flac 1.5.0", ""));
-
-        var sut = new FlacProbe(runner.Object);
-        (await sut.IsAvailableAsync()).Should().BeTrue();
+        var resolver = new Mock<IFlacBinaryResolver>();
+        resolver.Setup(r => r.ResolveFlacAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FlacResolution("/usr/bin/flac", FlacBinaryProvenance.Path));
+        var probe = new FlacProbe(resolver.Object);
+        (await probe.IsAvailableAsync()).Should().BeTrue();
     }
 
     [Fact]
-    public async Task IsAvailableAsync_RunnerReturnsNonzeroExit_ReturnsFalse()
+    public async Task IsAvailable_ResolverNotFound_ReturnsFalse()
     {
-        var runner = new Mock<IProcessRunner>();
-        runner.Setup(r => r.RunAsync("flac", It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-              .ReturnsAsync(new ProcessResult(127, "", "command not found"));
-
-        var sut = new FlacProbe(runner.Object);
-        (await sut.IsAvailableAsync()).Should().BeFalse();
+        var resolver = new Mock<IFlacBinaryResolver>();
+        resolver.Setup(r => r.ResolveFlacAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FlacResolution.NotFound);
+        var probe = new FlacProbe(resolver.Object);
+        (await probe.IsAvailableAsync()).Should().BeFalse();
     }
 
     [Fact]
-    public async Task IsAvailableAsync_RunnerThrowsWin32Exception_ReturnsFalse()
+    public async Task IsAvailable_CachesPositiveResult()
     {
-        var runner = new Mock<IProcessRunner>();
-        runner.Setup(r => r.RunAsync("flac", It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-              .ThrowsAsync(new Win32Exception("binary not found"));
-
-        var sut = new FlacProbe(runner.Object);
-        (await sut.IsAvailableAsync()).Should().BeFalse();
+        var resolver = new Mock<IFlacBinaryResolver>();
+        resolver.Setup(r => r.ResolveFlacAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FlacResolution("/x", FlacBinaryProvenance.Path));
+        var probe = new FlacProbe(resolver.Object);
+        await probe.IsAvailableAsync();
+        await probe.IsAvailableAsync();
+        await probe.IsAvailableAsync();
+        resolver.Verify(r => r.ResolveFlacAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
-    public async Task IsAvailableAsync_CalledTwice_RunnerCalledOnce_Cached()
+    public async Task IsAvailable_CachesNegativeResult()
     {
-        var runner = new Mock<IProcessRunner>();
-        runner.Setup(r => r.RunAsync("flac", It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-              .ReturnsAsync(new ProcessResult(0, "v", ""));
-
-        var sut = new FlacProbe(runner.Object);
-        var r1 = await sut.IsAvailableAsync();
-        var r2 = await sut.IsAvailableAsync();
-
-        r1.Should().BeTrue();
-        r2.Should().BeTrue();
-        runner.Verify(r => r.RunAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()),
-                      Times.Once);
+        var resolver = new Mock<IFlacBinaryResolver>();
+        resolver.Setup(r => r.ResolveFlacAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FlacResolution.NotFound);
+        var probe = new FlacProbe(resolver.Object);
+        (await probe.IsAvailableAsync()).Should().BeFalse();
+        (await probe.IsAvailableAsync()).Should().BeFalse();
+        resolver.Verify(r => r.ResolveFlacAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
-    public void Constructor_NullRunner_Throws()
+    public async Task IsAvailable_Concurrent_OnlyOneResolverCall()
     {
-        Action act = () => _ = new FlacProbe(null!);
-        act.Should().Throw<ArgumentNullException>();
+        var resolver = new Mock<IFlacBinaryResolver>();
+        resolver.Setup(r => r.ResolveFlacAsync(It.IsAny<CancellationToken>()))
+            .Returns(async () => { await Task.Delay(50); return new FlacResolution("/x", FlacBinaryProvenance.Path); });
+        var probe = new FlacProbe(resolver.Object);
+        var tasks = Enumerable.Range(0, 10).Select(_ => probe.IsAvailableAsync()).ToArray();
+        await Task.WhenAll(tasks);
+        tasks.Should().AllSatisfy(t => t.Result.Should().BeTrue());
+        resolver.Verify(r => r.ResolveFlacAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public void Ctor_NullResolver_Throws()
+    {
+        Action act = () => new FlacProbe(null!);
+        act.Should().Throw<ArgumentNullException>().WithParameterName("resolver");
     }
 }
