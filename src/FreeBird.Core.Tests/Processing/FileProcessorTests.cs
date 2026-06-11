@@ -11,6 +11,7 @@ using FreeBird.Core.Infrastructure;
 using FreeBird.Core.Metadata;
 using FreeBird.Core.Models;
 using FreeBird.Core.Processing;
+using FreeBird.Core.Provisioning;
 using FreeBird.Core.Sidecar;
 using Moq;
 using Serilog;
@@ -927,6 +928,41 @@ public class FileProcessorTests : IDisposable
         marker!.Status.Should().Be(MarkerStatus.Resolved);
         marker.TagWriteStatus.Should().Be("failed");
         marker.TagWriteReason.Should().Be("tag-write-failed");
+    }
+
+    [Fact]
+    public async Task ProcessAsync_TagWriterThrowsFlacNotAvailable_RecordsTagToolMissingReason_FileNotKilled()
+    {
+        // v3.1 T13: When the tag writer throws FlacNotAvailableException (metaflac
+        // missing — race after startup probe, or on a system where probe was skipped),
+        // we MUST convert to TagWriteResult.Failed("tag-tool-missing") and preserve
+        // the decoded audio. Tag-write is decorative; it never kills the file.
+        var (sut, _, sniffer, naming, integrity, _, metadata, tagWriter) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("42.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Success(new SongInfo(42, "T", new[] { "A" })));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
+              .Returns("A - T.flac");
+        tagWriter.Setup(t => t.WriteAsync(It.IsAny<string>(), It.IsAny<AudioFormat>(), It.IsAny<SongInfo>(), It.IsAny<CancellationToken>()))
+                 .ThrowsAsync(new FlacNotAvailableException("metaflac not on PATH"));
+
+        var opts = new ScanOptions(_inputDir, _outputDir) { WriteTags = true };
+        var result = await sut.ProcessAsync(ucPath, opts);
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        var expectedFinal = Path.Combine(_outputDir, "A - T.flac");
+        File.Exists(expectedFinal).Should().BeTrue();   // FILE PRESERVED — non-negotiable
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "42");
+        File.Exists(markerPath).Should().BeTrue();
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.Status.Should().Be(MarkerStatus.Resolved);
+        marker.TagWriteStatus.Should().Be("failed");
+        marker.TagWriteReason.Should().Be("tag-tool-missing");
     }
 
     // -------------------------------------------------------------------------

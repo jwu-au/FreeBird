@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using Autofac;
 using FluentAssertions;
 using FreeBird.Cli;
 using FreeBird.Core.Abstractions;
@@ -37,14 +38,15 @@ public class WatchRunnerTests : IDisposable
     {
         WatchRunner.OrchestratorFactoryOverride = null;
         WatchRunner.CoordinatorFactoryOverride = null;
+        WatchRunner.AdditionalContainerSetup = null;
         try { Directory.Delete(_tempDir, recursive: true); } catch { }
     }
 
-    private WatchOptions MakeOpts(string? logFile = null, bool noLogFile = false) => new()
+    private WatchOptions MakeOpts(string? logFile = null, bool noLogFile = false, IntegrityLevel integrity = IntegrityLevel.Off) => new()
     {
         InputDir = _inputDir,
         OutputDir = _outputDir,
-        Integrity = IntegrityLevel.Off,
+        Integrity = integrity,
         Concurrency = 2,
         Collision = CollisionPolicy.Skip,
         PollInterval = TimeSpan.FromSeconds(5),
@@ -392,5 +394,75 @@ public class WatchRunnerTests : IDisposable
         // return with SignalCount==0 is exit 0.
         exit.Should().Be(0,
             because: "external cancel with no signals produces a clean summary and exit 0");
+    }
+
+    // --- T13: startup flac probe + integrity-mode degradation in WatchRunner ---
+
+    [Fact]
+    public async Task Run_L3_FlacNotAvailable_ExitsBadArgs()
+    {
+        // Parity with ScanRunner: --integrity l3 + no flac binary on PATH must fail
+        // fast with ExitBadArgs(2) at startup, BEFORE the orchestrator is invoked.
+        var probe = new Mock<IFlacProbe>();
+        probe.Setup(p => p.IsAvailableAsync(It.IsAny<CancellationToken>())).ReturnsAsync(false);
+
+        var orch = new Mock<IWatchOrchestrator>();
+        orch.Setup(o => o.RunAsync(
+                It.IsAny<FreeBird.Core.Models.WatchOptions>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(EmptySummary());
+
+        WatchRunner.AdditionalContainerSetup = b =>
+        {
+            b.RegisterInstance(probe.Object).As<IFlacProbe>().SingleInstance();
+            b.RegisterInstance(orch.Object).As<IWatchOrchestrator>().SingleInstance();
+        };
+
+        var opts = MakeOpts(noLogFile: true, integrity: IntegrityLevel.L3);
+        var runner = new WatchRunner();
+        var exit = await runner.RunAsync(opts, CancellationToken.None);
+
+        exit.Should().Be(WatchRunner.ExitBadArgs);
+        // Orchestrator MUST NOT have been called — we failed before reaching the loop.
+        orch.Verify(o => o.RunAsync(
+            It.IsAny<FreeBird.Core.Models.WatchOptions>(),
+            It.IsAny<CancellationToken>(),
+            It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task Run_Auto_FlacNotAvailable_WarnsButProceeds()
+    {
+        // Parity with ScanRunner: --integrity auto + no flac binary -> WARN + continue.
+        // Exit code matches the orchestrator outcome (clean summary => ExitOk).
+        var probe = new Mock<IFlacProbe>();
+        probe.Setup(p => p.IsAvailableAsync(It.IsAny<CancellationToken>())).ReturnsAsync(false);
+
+        var orch = new Mock<IWatchOrchestrator>();
+        orch.Setup(o => o.RunAsync(
+                It.IsAny<FreeBird.Core.Models.WatchOptions>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(EmptySummary());
+
+        WatchRunner.AdditionalContainerSetup = b =>
+        {
+            b.RegisterInstance(probe.Object).As<IFlacProbe>().SingleInstance();
+            b.RegisterInstance(orch.Object).As<IWatchOrchestrator>().SingleInstance();
+        };
+
+        var opts = MakeOpts(noLogFile: true, integrity: IntegrityLevel.Auto);
+        var runner = new WatchRunner();
+        var exit = await runner.RunAsync(opts, CancellationToken.None);
+
+        exit.Should().Be(WatchRunner.ExitOk);
+        // Orchestrator SHOULD have been called — auto degrades silently to L1.
+        orch.Verify(o => o.RunAsync(
+            It.IsAny<FreeBird.Core.Models.WatchOptions>(),
+            It.IsAny<CancellationToken>(),
+            It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 }

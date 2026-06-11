@@ -241,6 +241,18 @@ public sealed class FileProcessor : IFileProcessor
                     {
                         throw;
                     }
+                    catch (FreeBird.Core.Provisioning.FlacNotAvailableException ex)
+                    {
+                        // T13: metaflac unavailable (race with startup probe, or probe was
+                        // skipped). Tag write is decorative — never kill the file. Record
+                        // the well-known sidecar reason so downstream tools / users see
+                        // the standard "tag-tool-missing" string.
+                        tagWriteStatus = "failed";
+                        tagWriteReason = "tag-tool-missing";
+                        _logger.Warning(
+                            "Tag write skipped for {Path}: metaflac unavailable ({Message})",
+                            finalPath, ex.Message);
+                    }
                     catch (Exception ex)
                     {
                         tagWriteStatus = "failed";

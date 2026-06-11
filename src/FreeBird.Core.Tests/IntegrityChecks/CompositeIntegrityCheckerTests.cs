@@ -5,6 +5,7 @@ using FluentAssertions;
 using FreeBird.Core.Abstractions;
 using FreeBird.Core.Integrity;
 using FreeBird.Core.Models;
+using FreeBird.Core.Provisioning;
 using Moq;
 
 namespace FreeBird.Core.Tests.IntegrityChecks;
@@ -156,5 +157,56 @@ public class CompositeIntegrityCheckerTests
     {
         Action act = () => _ = new CompositeIntegrityChecker(_l1.Object, _l3.Object, null!);
         act.Should().Throw<ArgumentNullException>();
+    }
+
+    // --- T13: FlacNotAvailableException degradation policy ---
+
+    [Fact]
+    public async Task CheckAsync_L3_FlacNotAvailable_ReturnsFailed()
+    {
+        // User explicitly asked for L3. If the binary disappears between startup probe
+        // and the L3 call (race), degrade to a Failed result so the file is quarantined
+        // — never silently downgrade behind the user's back.
+        _l3.Setup(c => c.CheckAsync(It.IsAny<string>(), It.IsAny<AudioFormat>(), It.IsAny<CancellationToken>()))
+           .ThrowsAsync(new FlacNotAvailableException("flac binary not found"));
+
+        var r = await _sut.CheckAsync("x.flac", AudioFormat.Flac, IntegrityLevel.L3);
+
+        r.Ok.Should().BeFalse();
+        r.LevelApplied.Should().Be(IntegrityLevel.L3);
+        r.Reason.Should().Contain("flac binary not available");
+        // L1 must NOT be silently invoked in --integrity l3 mode.
+        _l1.Verify(c => c.CheckAsync(It.IsAny<string>(), It.IsAny<AudioFormat>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CheckAsync_Auto_FlacNotAvailable_DegradesToL1()
+    {
+        // Auto mode: probe said available at startup, but resolver lost it mid-run.
+        // Degrade silently to L1 (the startup probe should have warned already).
+        _probe.Setup(p => p.IsAvailableAsync(It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        _l3.Setup(c => c.CheckAsync(It.IsAny<string>(), It.IsAny<AudioFormat>(), It.IsAny<CancellationToken>()))
+           .ThrowsAsync(new FlacNotAvailableException("flac binary not found"));
+
+        var r = await _sut.CheckAsync("x.flac", AudioFormat.Flac, IntegrityLevel.Auto);
+
+        r.Ok.Should().BeTrue();
+        r.LevelApplied.Should().Be(IntegrityLevel.L1);
+        _l1.Verify(c => c.CheckAsync("x.flac", AudioFormat.Flac, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task CheckAsync_L1_NotAffectedByL3Resolver()
+    {
+        // Sanity: an L1 request must never touch L3 (and therefore never trigger the
+        // FlacNotAvailableException path). Even if we sabotage L3, L1 should succeed.
+        _l3.Setup(c => c.CheckAsync(It.IsAny<string>(), It.IsAny<AudioFormat>(), It.IsAny<CancellationToken>()))
+           .ThrowsAsync(new FlacNotAvailableException("flac binary not found"));
+
+        var r = await _sut.CheckAsync("x.flac", AudioFormat.Flac, IntegrityLevel.L1);
+
+        r.LevelApplied.Should().Be(IntegrityLevel.L1);
+        _l1.Verify(c => c.CheckAsync("x.flac", AudioFormat.Flac, It.IsAny<CancellationToken>()), Times.Once);
+        _l3.Verify(c => c.CheckAsync(It.IsAny<string>(), It.IsAny<AudioFormat>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 }

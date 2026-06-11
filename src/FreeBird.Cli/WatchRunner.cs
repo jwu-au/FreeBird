@@ -119,6 +119,26 @@ public sealed class WatchRunner
                 {
                     container = BuildContainer(logger);
                     scope = container.BeginLifetimeScope();
+
+                    // T13 / parity with ScanRunner D2+D3+D4: probe flac at startup so we can
+                    // fail fast for --integrity l3 when the binary is missing, and emit a
+                    // one-time warning for --integrity auto's silent L1 degradation.
+                    var probe = scope.Resolve<IFlacProbe>();
+                    var flacAvailable = await probe.IsAvailableAsync(externalToken).ConfigureAwait(false);
+
+                    if (cliOptions.Integrity == IntegrityLevel.L3 && !flacAvailable)
+                    {
+                        logger.Error(
+                            "--integrity l3 requires the 'flac' binary on PATH (install via `brew install flac` / `apt install flac`).");
+                        return ExitBadArgs;
+                    }
+
+                    if (cliOptions.Integrity == IntegrityLevel.Auto && !flacAvailable)
+                    {
+                        logger.Warning(
+                            "--integrity auto: 'flac' binary not found on PATH; falling back to L1 (structural check only) for FLAC files. Install flac for full PCM-MD5 verification.");
+                    }
+
                     orchestrator = scope.Resolve<IWatchOrchestrator>();
                 }
 

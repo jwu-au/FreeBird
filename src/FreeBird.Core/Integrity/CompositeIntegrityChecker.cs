@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FreeBird.Core.Abstractions;
 using FreeBird.Core.Models;
+using FreeBird.Core.Provisioning;
 
 namespace FreeBird.Core.Integrity;
 
@@ -49,12 +50,35 @@ public sealed class CompositeIntegrityChecker : ICompositeIntegrityChecker
 
         var effective = await ResolveEffectiveLevelAsync(level, format, cancellationToken).ConfigureAwait(false);
 
-        return effective switch
+        if (effective == IntegrityLevel.L3)
         {
-            IntegrityLevel.L3 => await _l3.CheckAsync(filePath, format, cancellationToken).ConfigureAwait(false),
-            IntegrityLevel.L1 => await _l1.CheckAsync(filePath, format, cancellationToken).ConfigureAwait(false),
-            _ => throw new InvalidOperationException($"Unexpected effective level: {effective}"),
-        };
+            try
+            {
+                return await _l3.CheckAsync(filePath, format, cancellationToken).ConfigureAwait(false);
+            }
+            catch (FlacNotAvailableException)
+            {
+                // T13 degradation policy: the resolver returned NotFound between the
+                // startup probe and this L3 call (rare race — env changed mid-run, or
+                // probe was skipped, e.g., in unit-test composition).
+                //   * level == L3: user explicitly asked for L3 — never silently
+                //     downgrade. Quarantine the file with a clear reason.
+                //   * level == Auto (or anything else that resolved to L3): degrade
+                //     to L1. The startup probe should have warned the user already.
+                if (level == IntegrityLevel.L3)
+                {
+                    return IntegrityResult.Failed(IntegrityLevel.L3, "flac binary not available for L3 check");
+                }
+                return await _l1.CheckAsync(filePath, format, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        if (effective == IntegrityLevel.L1)
+        {
+            return await _l1.CheckAsync(filePath, format, cancellationToken).ConfigureAwait(false);
+        }
+
+        throw new InvalidOperationException($"Unexpected effective level: {effective}");
     }
 
     private async Task<IntegrityLevel> ResolveEffectiveLevelAsync(
