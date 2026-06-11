@@ -8,14 +8,27 @@ namespace FreeBird.Core.Provisioning;
 /// verifies SHA256 (T09), extracts the four required Win64/ binaries (T10), and reports success.
 /// </summary>
 /// <remarks>
-/// T08 scope: download only. SHA verify and extraction land in T09 and T10 respectively.
-/// While incomplete, this impl returns Failed after a successful download (with a clear reason)
-/// so it can be wired through the resolver without producing fake-positive Installed results.
+/// T08 added download to temp file; T09 added SHA256 verification and ZIP path-traversal safety;
+/// T10 added actual extraction of the four required Win64 binaries plus a post-write existence
+/// check (R3 mitigation: antivirus may silently quarantine extracted binaries).
 /// </remarks>
 public sealed class WindowsFlacAutoInstaller : IFlacAutoInstaller
 {
     /// <summary>Name of the temp file written next to the target directory during download.</summary>
     internal const string TempZipName = ".freebird-flac-install.zip.tmp";
+
+    /// <summary>
+    /// ZIP entry paths inside flac-1.5.0-win.zip that we extract to the target directory.
+    /// Each entry's basename (after stripping the Win64/ prefix) becomes a file in targetDirectory.
+    /// 32-bit binaries from Win32/ are intentionally NOT installed.
+    /// </summary>
+    internal static readonly IReadOnlyList<string> Win64Files = new[]
+    {
+        "Win64/flac.exe",
+        "Win64/metaflac.exe",
+        "Win64/libFLAC.dll",
+        "Win64/libFLAC++.dll",
+    };
 
     /// <summary>
     /// Expected SHA256 of the pinned flac-1.5.0-win.zip from Xiph OSUOSL.
@@ -137,9 +150,86 @@ public sealed class WindowsFlacAutoInstaller : IFlacAutoInstaller
             return new FlacInstallResult.Failed($"zip validation failed: {ex.Message}");
         }
 
-        // T10 will perform actual extraction here.
+        // T10 — Extract the four required Win64 binaries.
+        // We pass the accumulator INTO the helper so on-throw partial state is visible
+        // to the catch handlers below (otherwise the helper's local list is lost on exception).
+        var extractedPaths = new List<string>(Win64Files.Count);
+        try
+        {
+            await ExtractWin64FilesAsync(tempZipPath, targetDirectory, extractedPaths, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            TryDeleteFile(tempZipPath);
+            TryDeleteFiles(extractedPaths);
+            throw;
+        }
+        catch (FlacEntryMissingException ex)
+        {
+            TryDeleteFile(tempZipPath);
+            TryDeleteFiles(extractedPaths);
+            return new FlacInstallResult.Failed($"required entry missing in archive: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            TryDeleteFile(tempZipPath);
+            TryDeleteFiles(extractedPaths);
+            return new FlacInstallResult.Failed($"extraction failed: {ex.Message}");
+        }
+
+        // T10 — Post-write existence check (R3: AV may have silently quarantined a file)
+        var missingAfterWrite = extractedPaths.Where(p => !_fs.File.Exists(p)).ToList();
+        if (missingAfterWrite.Count > 0)
+        {
+            TryDeleteFiles(extractedPaths);
+            TryDeleteFile(tempZipPath);
+            var missingNames = string.Join(", ", missingAfterWrite.Select(p => _fs.Path.GetFileName(p)));
+            return new FlacInstallResult.Failed(
+                $"file(s) missing after extraction (likely quarantined by antivirus): {missingNames}");
+        }
+
         TryDeleteFile(tempZipPath);
-        return new FlacInstallResult.Failed("extraction not yet implemented (T10 will complete)");
+        _log.Information("flac binaries installed to {TargetDirectory}", targetDirectory);
+        var flacPath = _fs.Path.Combine(targetDirectory, "flac.exe");
+        var metaflacPath = _fs.Path.Combine(targetDirectory, "metaflac.exe");
+        return new FlacInstallResult.Installed(flacPath, metaflacPath);
+    }
+
+    private async Task ExtractWin64FilesAsync(string zipPath, string targetDirectory, List<string> written, CancellationToken ct)
+    {
+        using var stream = _fs.File.OpenRead(zipPath);
+        using var archive = new System.IO.Compression.ZipArchive(stream, System.IO.Compression.ZipArchiveMode.Read);
+
+        foreach (var entryPath in Win64Files)
+        {
+            ct.ThrowIfCancellationRequested();
+            var entry = archive.GetEntry(entryPath);
+            if (entry is null)
+            {
+                throw new FlacEntryMissingException(entryPath);
+            }
+
+            // Strip 'Win64/' prefix — file lives directly in targetDirectory
+            var basename = entry.Name;  // e.g. 'flac.exe' — Name is the leaf, already minus directory prefix
+            var destPath = _fs.Path.Combine(targetDirectory, basename);
+
+            _log.Information("Extracting {Entry} \u2192 {TargetPath}", entryPath, destPath);
+
+            await using (var entryStream = entry.Open())
+            await using (var destStream = _fs.File.Create(destPath))
+            {
+                await entryStream.CopyToAsync(destStream, ct).ConfigureAwait(false);
+            }
+            written.Add(destPath);
+        }
+    }
+
+    private void TryDeleteFiles(IEnumerable<string> paths)
+    {
+        foreach (var p in paths)
+        {
+            TryDeleteFile(p);
+        }
     }
 
     private async Task<string> ComputeSha256Async(string filePath, CancellationToken ct)
@@ -221,4 +311,14 @@ public sealed class WindowsFlacAutoInstaller : IFlacAutoInstaller
 internal sealed class UnsafeZipEntryException : Exception
 {
     public UnsafeZipEntryException(string message) : base(message) { }
+}
+
+/// <summary>
+/// Sentinel exception thrown by <see cref="WindowsFlacAutoInstaller"/> when a required
+/// Win64 entry (see <see cref="WindowsFlacAutoInstaller.Win64Files"/>) is absent from the archive.
+/// Internal — callers see a <see cref="FlacInstallResult.Failed"/> with the message.
+/// </summary>
+internal sealed class FlacEntryMissingException : Exception
+{
+    public FlacEntryMissingException(string entryName) : base($"ZIP entry not found: {entryName}") { }
 }

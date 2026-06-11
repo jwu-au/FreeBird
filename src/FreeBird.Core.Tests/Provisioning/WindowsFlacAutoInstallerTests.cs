@@ -13,6 +13,14 @@ public class WindowsFlacAutoInstallerTests : IDisposable
     private const string ValidUrl = "https://ftp.osuosl.org/pub/xiph/releases/flac/flac-1.5.0-win.zip";
     private const string TargetDir = "/app";
 
+    private static readonly string[] Win64FilesAll = new[]
+    {
+        "Win64/flac.exe",
+        "Win64/metaflac.exe",
+        "Win64/libFLAC.dll",
+        "Win64/libFLAC++.dll",
+    };
+
     // Snapshot the canonical SHA so each test can mutate ExpectedSha256 freely; we restore on Dispose.
     private readonly string _originalSha = WindowsFlacAutoInstaller.ExpectedSha256;
 
@@ -67,8 +75,9 @@ public class WindowsFlacAutoInstallerTests : IDisposable
     // -------- T09 tests --------
 
     [Fact]
-    public async Task InstallAsync_ValidShaSafeZip_ReturnsFailed_ExtractionNotYet()
+    public async Task InstallAsync_ZipMissingRequiredEntry_ReturnsFailed()
     {
+        // Only one of four required Win64 entries — missing-entry path should fail with a clear reason.
         var zipBytes = BuildValidZipWithEntries("Win64/flac.exe");
         WindowsFlacAutoInstaller.ExpectedSha256 = ComputeSha(zipBytes);
         var (installer, _, _) = Build(respond: async (u, dest, ct) =>
@@ -80,7 +89,7 @@ public class WindowsFlacAutoInstallerTests : IDisposable
         var result = await installer.InstallAsync(TargetDir, ValidUrl, CancellationToken.None);
 
         result.Should().BeOfType<FlacInstallResult.Failed>()
-            .Which.Reason.Should().Contain("extraction not yet implemented");
+            .Which.Reason.Should().Contain("required entry missing");
     }
 
     [Fact]
@@ -144,12 +153,11 @@ public class WindowsFlacAutoInstallerTests : IDisposable
     }
 
     [Fact]
-    public async Task InstallAsync_ZipWithSafeNestedPath_Accepted()
+    public async Task InstallAsync_ValidZip_AllFourFilesExtracted_ReturnsInstalled()
     {
-        var zipBytes = BuildValidZipWithEntries(
-            "Win64/flac.exe", "Win64/metaflac.exe", "Win64/libFLAC.dll", "Win64/libFLAC++.dll");
+        var zipBytes = BuildValidZipWithEntries(Win64FilesAll);
         WindowsFlacAutoInstaller.ExpectedSha256 = ComputeSha(zipBytes);
-        var (installer, _, _) = Build(respond: async (u, dest, ct) =>
+        var (installer, _, fs) = Build(respond: async (u, dest, ct) =>
         {
             await dest.WriteAsync(zipBytes, ct);
             return zipBytes.Length;
@@ -157,8 +165,14 @@ public class WindowsFlacAutoInstallerTests : IDisposable
 
         var result = await installer.InstallAsync(TargetDir, ValidUrl, CancellationToken.None);
 
-        result.Should().BeOfType<FlacInstallResult.Failed>()
-            .Which.Reason.Should().Contain("extraction not yet implemented");
+        var installed = result.Should().BeOfType<FlacInstallResult.Installed>().Which;
+        installed.FlacPath.Should().Be(Path.Combine(TargetDir, "flac.exe"));
+        installed.MetaflacPath.Should().Be(Path.Combine(TargetDir, "metaflac.exe"));
+
+        foreach (var fn in new[] { "flac.exe", "metaflac.exe", "libFLAC.dll", "libFLAC++.dll" })
+        {
+            fs.File.Exists(Path.Combine(TargetDir, fn)).Should().BeTrue($"{fn} should be extracted");
+        }
     }
 
     [Fact]
@@ -186,6 +200,82 @@ public class WindowsFlacAutoInstallerTests : IDisposable
         WindowsFlacAutoInstaller.ExpectedSha256.Should().Be(
             "53f1500f0d6e7c61379d7fee50d4a9f7f504c650009506d9ba015530d76c0dde",
             "the pinned SHA must not drift without updating the URL in tandem");
+    }
+
+    // -------- T10 tests --------
+
+    [Fact]
+    public async Task InstallAsync_ValidZipWithAllFourFiles_ReturnsInstalled_AndFilesExist()
+    {
+        var zipBytes = BuildValidZipWithEntries(Win64FilesAll);
+        WindowsFlacAutoInstaller.ExpectedSha256 = ComputeSha(zipBytes);
+        var (installer, _, fs) = Build(respond: async (u, dest, ct) => { await dest.WriteAsync(zipBytes, ct); return zipBytes.Length; });
+
+        var result = await installer.InstallAsync(TargetDir, ValidUrl, CancellationToken.None);
+
+        var installed = result.Should().BeOfType<FlacInstallResult.Installed>().Which;
+        installed.FlacPath.Should().Be(Path.Combine(TargetDir, "flac.exe"));
+        installed.MetaflacPath.Should().Be(Path.Combine(TargetDir, "metaflac.exe"));
+
+        foreach (var fn in new[] { "flac.exe", "metaflac.exe", "libFLAC.dll", "libFLAC++.dll" })
+        {
+            fs.File.Exists(Path.Combine(TargetDir, fn)).Should().BeTrue($"{fn} should be extracted");
+        }
+    }
+
+    [Fact]
+    public async Task InstallAsync_Success_DeletesTempZip()
+    {
+        var zipBytes = BuildValidZipWithEntries(Win64FilesAll);
+        WindowsFlacAutoInstaller.ExpectedSha256 = ComputeSha(zipBytes);
+        var (installer, _, fs) = Build(respond: async (u, dest, ct) => { await dest.WriteAsync(zipBytes, ct); return zipBytes.Length; });
+
+        await installer.InstallAsync(TargetDir, ValidUrl, CancellationToken.None);
+
+        var tempPath = Path.Combine(TargetDir, WindowsFlacAutoInstaller.TempZipName);
+        fs.File.Exists(tempPath).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task InstallAsync_ZipMissingRequiredEntry_ReturnsFailed_AndCleansUpAll()
+    {
+        // Build ZIP with only 3 of 4 required entries
+        var zipBytes = BuildValidZipWithEntries("Win64/flac.exe", "Win64/metaflac.exe", "Win64/libFLAC.dll");
+        WindowsFlacAutoInstaller.ExpectedSha256 = ComputeSha(zipBytes);
+        var (installer, _, fs) = Build(respond: async (u, dest, ct) => { await dest.WriteAsync(zipBytes, ct); return zipBytes.Length; });
+
+        var result = await installer.InstallAsync(TargetDir, ValidUrl, CancellationToken.None);
+
+        result.Should().BeOfType<FlacInstallResult.Failed>()
+            .Which.Reason.Should().Contain("required entry missing");
+
+        // Partial extractions should be cleaned up
+        foreach (var fn in new[] { "flac.exe", "metaflac.exe", "libFLAC.dll", "libFLAC++.dll" })
+        {
+            fs.File.Exists(Path.Combine(TargetDir, fn)).Should().BeFalse($"partial {fn} should be cleaned up");
+        }
+        fs.File.Exists(Path.Combine(TargetDir, WindowsFlacAutoInstaller.TempZipName)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task InstallAsync_ZipExtraEntries_ExtractsOnlyRequiredFour()
+    {
+        // Extra entries (Win32/, share/man/) shouldn't be extracted; only Win64/ targets land
+        var allEntries = Win64FilesAll.Concat(new[] { "Win32/flac.exe", "share/man/flac.1" }).ToArray();
+        var zipBytes = BuildValidZipWithEntries(allEntries);
+        WindowsFlacAutoInstaller.ExpectedSha256 = ComputeSha(zipBytes);
+        var (installer, _, fs) = Build(respond: async (u, dest, ct) => { await dest.WriteAsync(zipBytes, ct); return zipBytes.Length; });
+
+        var result = await installer.InstallAsync(TargetDir, ValidUrl, CancellationToken.None);
+
+        result.Should().BeOfType<FlacInstallResult.Installed>();
+        foreach (var fn in new[] { "flac.exe", "metaflac.exe", "libFLAC.dll", "libFLAC++.dll" })
+        {
+            fs.File.Exists(Path.Combine(TargetDir, fn)).Should().BeTrue();
+        }
+        // Win32/flac.exe should NOT have been extracted to /app/Win32/flac.exe
+        fs.File.Exists(Path.Combine(TargetDir, "Win32", "flac.exe")).Should().BeFalse();
+        fs.Directory.Exists(Path.Combine(TargetDir, "Win32")).Should().BeFalse();
     }
 
     // -------- T08 carried-forward tests (updated to satisfy T09 SHA gate) --------
