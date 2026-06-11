@@ -19,15 +19,17 @@ public sealed class WindowsFlacAutoInstaller : IFlacAutoInstaller
 
     /// <summary>
     /// ZIP entry paths inside flac-1.5.0-win.zip that we extract to the target directory.
-    /// Each entry's basename (after stripping the Win64/ prefix) becomes a file in targetDirectory.
-    /// 32-bit binaries from Win32/ are intentionally NOT installed.
+    /// The official Xiph ZIP wraps everything in a top-level <c>flac-1.5.0-win/</c> directory,
+    /// so the lookup keys must include that prefix to match.
+    /// Each entry's basename (Name property — leaf only) becomes a file in targetDirectory.
+    /// 32-bit binaries from <c>flac-1.5.0-win/Win32/</c> are intentionally NOT installed.
     /// </summary>
     internal static readonly IReadOnlyList<string> Win64Files = new[]
     {
-        "Win64/flac.exe",
-        "Win64/metaflac.exe",
-        "Win64/libFLAC.dll",
-        "Win64/libFLAC++.dll",
+        "flac-1.5.0-win/Win64/flac.exe",
+        "flac-1.5.0-win/Win64/metaflac.exe",
+        "flac-1.5.0-win/Win64/libFLAC.dll",
+        "flac-1.5.0-win/Win64/libFLAC++.dll",
     };
 
     /// <summary>

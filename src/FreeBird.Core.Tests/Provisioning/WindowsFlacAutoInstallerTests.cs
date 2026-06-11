@@ -15,10 +15,10 @@ public class WindowsFlacAutoInstallerTests : IDisposable
 
     private static readonly string[] Win64FilesAll = new[]
     {
-        "Win64/flac.exe",
-        "Win64/metaflac.exe",
-        "Win64/libFLAC.dll",
-        "Win64/libFLAC++.dll",
+        "flac-1.5.0-win/Win64/flac.exe",
+        "flac-1.5.0-win/Win64/metaflac.exe",
+        "flac-1.5.0-win/Win64/libFLAC.dll",
+        "flac-1.5.0-win/Win64/libFLAC++.dll",
     };
 
     // Snapshot the canonical SHA so each test can mutate ExpectedSha256 freely; we restore on Dispose.
@@ -78,7 +78,7 @@ public class WindowsFlacAutoInstallerTests : IDisposable
     public async Task InstallAsync_ZipMissingRequiredEntry_ReturnsFailed()
     {
         // Only one of four required Win64 entries — missing-entry path should fail with a clear reason.
-        var zipBytes = BuildValidZipWithEntries("Win64/flac.exe");
+        var zipBytes = BuildValidZipWithEntries("flac-1.5.0-win/Win64/flac.exe");
         WindowsFlacAutoInstaller.ExpectedSha256 = ComputeSha(zipBytes);
         var (installer, _, _) = Build(respond: async (u, dest, ct) =>
         {
@@ -95,7 +95,7 @@ public class WindowsFlacAutoInstallerTests : IDisposable
     [Fact]
     public async Task InstallAsync_ShaMismatch_ReturnsFailed_AndCleansUpTemp()
     {
-        var zipBytes = BuildValidZipWithEntries("Win64/flac.exe");
+        var zipBytes = BuildValidZipWithEntries("flac-1.5.0-win/Win64/flac.exe");
         WindowsFlacAutoInstaller.ExpectedSha256 = new string('0', 64); // intentional mismatch
         var (installer, _, fs) = Build(respond: async (u, dest, ct) =>
         {
@@ -240,7 +240,7 @@ public class WindowsFlacAutoInstallerTests : IDisposable
     public async Task InstallAsync_ZipMissingRequiredEntry_ReturnsFailed_AndCleansUpAll()
     {
         // Build ZIP with only 3 of 4 required entries
-        var zipBytes = BuildValidZipWithEntries("Win64/flac.exe", "Win64/metaflac.exe", "Win64/libFLAC.dll");
+        var zipBytes = BuildValidZipWithEntries("flac-1.5.0-win/Win64/flac.exe", "flac-1.5.0-win/Win64/metaflac.exe", "flac-1.5.0-win/Win64/libFLAC.dll");
         WindowsFlacAutoInstaller.ExpectedSha256 = ComputeSha(zipBytes);
         var (installer, _, fs) = Build(respond: async (u, dest, ct) => { await dest.WriteAsync(zipBytes, ct); return zipBytes.Length; });
 
@@ -260,8 +260,9 @@ public class WindowsFlacAutoInstallerTests : IDisposable
     [Fact]
     public async Task InstallAsync_ZipExtraEntries_ExtractsOnlyRequiredFour()
     {
-        // Extra entries (Win32/, share/man/) shouldn't be extracted; only Win64/ targets land
-        var allEntries = Win64FilesAll.Concat(new[] { "Win32/flac.exe", "share/man/flac.1" }).ToArray();
+        // Extra entries (Win32/, share/man/) shouldn't be extracted; only Win64/ targets land.
+        // Mirrors the real upstream Xiph layout where everything is wrapped in flac-1.5.0-win/.
+        var allEntries = Win64FilesAll.Concat(new[] { "flac-1.5.0-win/Win32/flac.exe", "flac-1.5.0-win/share/man/flac.1" }).ToArray();
         var zipBytes = BuildValidZipWithEntries(allEntries);
         WindowsFlacAutoInstaller.ExpectedSha256 = ComputeSha(zipBytes);
         var (installer, _, fs) = Build(respond: async (u, dest, ct) => { await dest.WriteAsync(zipBytes, ct); return zipBytes.Length; });
@@ -283,7 +284,7 @@ public class WindowsFlacAutoInstallerTests : IDisposable
     [Fact]
     public async Task InstallAsync_DownloadSucceeds_CleansUpTempFile()
     {
-        var zipBytes = BuildValidZipWithEntries("Win64/flac.exe");
+        var zipBytes = BuildValidZipWithEntries("flac-1.5.0-win/Win64/flac.exe");
         WindowsFlacAutoInstaller.ExpectedSha256 = ComputeSha(zipBytes);
         var (installer, _, fs) = Build(respond: async (u, dest, ct) =>
         {
@@ -371,7 +372,7 @@ public class WindowsFlacAutoInstallerTests : IDisposable
     [Fact]
     public async Task InstallAsync_StaleTempFileExists_DeletesItBeforeDownload()
     {
-        var zipBytes = BuildValidZipWithEntries("Win64/flac.exe");
+        var zipBytes = BuildValidZipWithEntries("flac-1.5.0-win/Win64/flac.exe");
         WindowsFlacAutoInstaller.ExpectedSha256 = ComputeSha(zipBytes);
         var staleContent = new byte[] { 1, 2, 3 };
         var tempPath = Path.Combine(TargetDir, WindowsFlacAutoInstaller.TempZipName);
@@ -404,5 +405,51 @@ public class WindowsFlacAutoInstallerTests : IDisposable
     {
         var act = () => new WindowsFlacAutoInstaller(new Mock<IHttpDownloader>().Object, new MockFileSystem(), null!);
         act.Should().Throw<ArgumentNullException>().WithParameterName("log");
+    }
+
+    /// <summary>
+    /// v3.3.1 regression guard — locks the ZIP entry path schema against the real upstream layout.
+    /// The official Xiph flac-1.5.0-win.zip wraps all entries in a top-level "flac-1.5.0-win/" directory.
+    /// If a future FLAC release ever changes this prefix (e.g. "flac-1.5.1-win/"), Win64Files lookup keys
+    /// must be updated in lockstep.
+    /// </summary>
+    [Fact]
+    public async Task InstallAsync_RealUpstreamZipLayout_AllFourEntriesFound()
+    {
+        // Build ZIP mirroring the *exact* upstream layout, including the wrapper directory
+        // entry plus the four required Win64 binaries (and Win32 + docs we ignore).
+        var zipBytes = BuildValidZipWithEntries(
+            "flac-1.5.0-win/",                               // wrapper dir entry
+            "flac-1.5.0-win/Win64/",                         // Win64 dir entry
+            "flac-1.5.0-win/Win64/flac.exe",
+            "flac-1.5.0-win/Win64/metaflac.exe",
+            "flac-1.5.0-win/Win64/libFLAC.dll",
+            "flac-1.5.0-win/Win64/libFLAC++.dll",
+            "flac-1.5.0-win/Win32/",                         // Win32 dir entry — must be ignored
+            "flac-1.5.0-win/Win32/flac.exe",                 // 32-bit — must be ignored
+            "flac-1.5.0-win/AUTHORS",
+            "flac-1.5.0-win/README-for-these-builds.txt",
+            "flac-1.5.0-win/manuals/",
+            "flac-1.5.0-win/manuals/flac.html"
+        );
+        WindowsFlacAutoInstaller.ExpectedSha256 = ComputeSha(zipBytes);
+        var (installer, _, fs) = Build(respond: async (u, dest, ct) =>
+        {
+            await dest.WriteAsync(zipBytes, ct);
+            return zipBytes.Length;
+        });
+
+        var result = await installer.InstallAsync(TargetDir, ValidUrl, CancellationToken.None);
+
+        // All four Win64 binaries land in TargetDir with leaf-only names.
+        result.Should().BeOfType<FlacInstallResult.Installed>();
+        foreach (var fn in new[] { "flac.exe", "metaflac.exe", "libFLAC.dll", "libFLAC++.dll" })
+        {
+            fs.File.Exists(Path.Combine(TargetDir, fn))
+                .Should().BeTrue($"{fn} should have been extracted from flac-1.5.0-win/Win64/{fn}");
+        }
+        // Win32 binaries and docs must NOT be extracted.
+        fs.File.Exists(Path.Combine(TargetDir, "Win32", "flac.exe")).Should().BeFalse();
+        fs.File.Exists(Path.Combine(TargetDir, "AUTHORS")).Should().BeFalse();
     }
 }

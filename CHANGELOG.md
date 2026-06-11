@@ -5,6 +5,19 @@ All notable changes to FreeBird are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.1] — 2026-06-11
+
+### Fixed
+- **Windows flac auto-install: ZIP entry paths now match real upstream layout**. v3.1.0 through v3.3.0 had hardcoded ZIP entry lookup paths as `Win64/flac.exe`, but the official Xiph `flac-1.5.0-win.zip` wraps all entries in a top-level `flac-1.5.0-win/` directory. Result: every auto-install attempt on Windows failed with `flac install failed: required entry missing in archive: zip entry not found: Win64/flac.exe`. Empirically verified against the real upstream ZIP.
+
+### Internal
+- Added `InstallAsync_RealUpstreamZipLayout_AllFourEntriesFound` regression guard that simulates the exact upstream ZIP layout (wrapper dir + Win32 + Win64 + docs).
+- Updated all 6 existing test fixtures to use the realistic `flac-1.5.0-win/Win64/...` path prefix (they were mirroring the bug, not catching it).
+
+### Migration notes
+- No user action needed if you previously hit `required entry missing in archive`. Upgrade to v3.3.1 and re-run `fb scan` / `fb watch`; auto-install will now succeed on first attempt.
+- If you manually placed `flac.exe`/`metaflac.exe` next to `fb.exe` as a workaround, you can leave them there — the resolver still finds PATH/beside-fb first.
+
 ## [3.3.0] — 2026-06-11
 
 ### Changed
