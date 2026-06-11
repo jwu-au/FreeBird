@@ -392,6 +392,7 @@ public sealed class FileProcessor : IFileProcessor
 
         var sb = new StringBuilder();
         sb.Append("timestamp: ").AppendLine(DateTime.UtcNow.ToString("O"));
+        sb.AppendLine("version: 3");
         sb.Append("source:    ").AppendLine(sourcePath);
         sb.Append("format:    ").AppendLine(format.ToString());
         sb.Append("integrity: ").AppendLine(levelApplied?.ToString() ?? "-");

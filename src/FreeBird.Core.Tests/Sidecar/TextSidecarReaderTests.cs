@@ -397,4 +397,49 @@ public sealed class TextSidecarReaderTests : IDisposable
         rec.Format.Should().Be(AudioFormat.Flac);
         rec.IntegrityLevel.Should().Be(IntegrityLevel.L3);
     }
+
+    // --- v3.2 T04: schema version field ---
+
+    [Fact]
+    public async Task TryReadAsync_WithVersion3Field_ParsesVersion()
+    {
+        var path = await WriteTextFileAsync(new[]
+        {
+            "timestamp: 2026-06-11T16:40:05.0000000Z",
+            "version: 3",
+            "source:    /tmp/foo.uc",
+            "format:    Flac",
+            "integrity: L3",
+            "reason:    integrity failed (flac -t failed)",
+            "source_size: 12345",
+            "source_mtime: 2026-06-11T16:35:00.0000000Z",
+        });
+
+        var rec = await _reader.TryReadAsync(path);
+
+        rec.Should().NotBeNull();
+        rec!.Version.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task TryReadAsync_LegacyV2SidecarWithoutVersion_ReturnsVersionNull()
+    {
+        // Pre-v3.2 (v2) sidecars do not have a `version:` line. Reader must accept them
+        // and surface Version == null so callers can detect legacy-format records.
+        var path = await WriteTextFileAsync(new[]
+        {
+            "timestamp: 2026-06-08T22:14:02.0870900Z",
+            "source:    /path/to/input/foo.uc",
+            "format:    Flac",
+            "integrity: L3",
+            "reason:    flac -t failed",
+            "source_size: 4628511",
+            "source_mtime: 2026-06-09T14:22:11.0000000Z",
+        });
+
+        var rec = await _reader.TryReadAsync(path);
+
+        rec.Should().NotBeNull();
+        rec!.Version.Should().BeNull();
+    }
 }

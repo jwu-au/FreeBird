@@ -42,6 +42,7 @@ public sealed class TextSidecarReader : ISidecarReader
         string? reason = null;
         long? sourceSize = null;
         DateTimeOffset? sourceMtime = null;
+        int? version = null;
         Dictionary<string, string>? unknown = null;
 
         foreach (var rawLine in lines)
@@ -106,6 +107,12 @@ public sealed class TextSidecarReader : ISidecarReader
                         sourceMtime = mt;
                     }
                     break;
+                case "version":
+                    if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v))
+                    {
+                        version = v;
+                    }
+                    break;
                 default:
                     (unknown ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase))[key] = value;
                     break;
@@ -125,6 +132,7 @@ public sealed class TextSidecarReader : ISidecarReader
             Reason: reason,
             SourceSize: sourceSize,
             SourceMtime: sourceMtime,
+            Version: version,
             UnknownFields: unknown);
     }
 }

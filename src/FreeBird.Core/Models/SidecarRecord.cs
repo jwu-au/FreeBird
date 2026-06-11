@@ -18,6 +18,10 @@ namespace FreeBird.Core.Models;
 /// <param name="SourceMtime">
 /// Source file last-write time when the sidecar was created. Null for v1 sidecars.
 /// </param>
+/// <param name="Version">
+/// Schema version written by the producer. Null for legacy v2-and-earlier sidecars that
+/// pre-date the <c>version:</c> field. v3.2+ writers emit <c>3</c>.
+/// </param>
 /// <param name="UnknownFields">
 /// Forward-compatibility bucket for unrecognized <c>key: value</c> lines. Null when none.
 /// </param>
@@ -29,4 +33,5 @@ public sealed record SidecarRecord(
     string Reason,
     long? SourceSize = null,
     DateTimeOffset? SourceMtime = null,
+    int? Version = null,
     IReadOnlyDictionary<string, string>? UnknownFields = null);

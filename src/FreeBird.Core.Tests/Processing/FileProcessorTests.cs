@@ -615,6 +615,32 @@ public class FileProcessorTests : IDisposable
         idxSourceMtime.Should().BeGreaterThan(idxSourceSize);
     }
 
+    // --- v3.2 T04: schema version field (forward-compat) ---
+
+    [Fact]
+    public void BuildSidecarContent_IncludesVersion3LineAfterTimestamp()
+    {
+        var path = Path.Combine(_tempDir, "v3.uc");
+        File.WriteAllBytes(path, new byte[16]);
+
+        var content = FileProcessor.BuildSidecarContentForTesting(
+            path, AudioFormat.Flac, IntegrityLevel.L3, "any reason",
+            new Mock<ILogger>().Object);
+
+        // The literal `version: 3` line must appear and must come directly after the
+        // `timestamp:` line (no other field between them). Use line-based assertion so
+        // the test is platform-agnostic (\r\n on Windows, \n elsewhere).
+        var lines = content.Split('\n').Select(l => l.TrimEnd('\r')).ToArray();
+        var idxTimestampLine = Array.FindIndex(lines, l => l.StartsWith("timestamp:", StringComparison.Ordinal));
+        var idxVersionLine   = Array.FindIndex(lines, l => l.StartsWith("version:",   StringComparison.Ordinal));
+        var idxSourceLine    = Array.FindIndex(lines, l => l.StartsWith("source:",    StringComparison.Ordinal));
+
+        idxTimestampLine.Should().BeGreaterThanOrEqualTo(0);
+        idxVersionLine.Should().Be(idxTimestampLine + 1, "version line must immediately follow timestamp line");
+        idxSourceLine.Should().Be(idxVersionLine + 1, "source line must follow version line");
+        lines[idxVersionLine].Should().Be("version: 3");
+    }
+
     // --- T15.6 D6: .uc! quarantine name strips suffix correctly ---
 
     [Fact]
