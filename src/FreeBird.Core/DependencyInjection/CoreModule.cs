@@ -151,5 +151,47 @@ public sealed class CoreModule : Module
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15");
             return client;
         }).As<HttpClient>().SingleInstance();
+
+        // ===========================================================================
+        // T07.5 — Flac binary provisioning graph (v3.1)
+        //
+        // FlacBinaryResolver depends on five things; here we register the four that
+        // aren't already auto-scanned:
+        //   - System.IO.Abstractions.IFileSystem    (real System.IO wrapper)
+        //   - IPathEnvironment                       (PATH probe; explicitly NOT IDependency)
+        //   - IAppBaseDirectoryProvider              (AppContext.BaseDirectory)
+        //   - FlacResolverOptions                    (factory: pulls base dir from provider)
+        //
+        // The 5th dep (IFlacAutoInstaller) is satisfied by the auto-scan picking up
+        // NoOpFlacAutoInstaller. T15 will OS-conditionally swap to WindowsFlacAutoInstaller.
+        //
+        // CLI-driven overrides (--flac-bin, --flac-url, --no-auto-download) flow into
+        // FlacResolverOptions in T11; for now the defaults are nulls/false.
+        // ===========================================================================
+        builder.RegisterType<System.IO.Abstractions.FileSystem>()
+               .As<System.IO.Abstractions.IFileSystem>()
+               .SingleInstance();
+
+        builder.RegisterType<FreeBird.Core.Provisioning.PathEnvironment>()
+               .As<FreeBird.Core.Provisioning.IPathEnvironment>()
+               .SingleInstance();
+
+        builder.RegisterType<FreeBird.Core.Provisioning.AppContextBaseDirectoryProvider>()
+               .As<FreeBird.Core.Provisioning.IAppBaseDirectoryProvider>()
+               .SingleInstance();
+
+        // FlacResolverOptions factory — pulls AppBaseDirectory from the provider at first
+        // resolution. Override / URL / DisableAutoInstall stay null/false until the CLI
+        // binder (T11) replaces this registration with one populated from FlacOptions.
+        builder.Register(c => new FreeBird.Core.Provisioning.FlacResolverOptions
+               {
+                   AppBaseDirectory = c.Resolve<FreeBird.Core.Provisioning.IAppBaseDirectoryProvider>().GetBaseDirectory(),
+                   FlacBinOverride = null,
+                   MetaflacBinOverride = null,
+                   AutoInstallUrl = null,
+                   DisableAutoInstall = false,
+               })
+               .AsSelf()
+               .SingleInstance();
     }
 }
