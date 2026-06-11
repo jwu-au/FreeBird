@@ -756,8 +756,11 @@ public class FileProcessorTests : IDisposable
                 .ReturnsAsync(new MetadataResolution.Success(new SongInfo(1, "T", new[] { "A" }, Album: "AL")));
         // The mock returns a fixed name regardless of inputs — we only care that
         // the 4th argument (per-run template) matches the per-run options string.
+        // NOTE: filename uses '-' (not '|') because '|' is a reserved character
+        // on Windows NTFS and File.Create would throw. The TEMPLATE itself can
+        // still contain '|' since it's never written to disk.
         naming.Setup(n => n.GetTargetName(It.IsAny<string>(), It.IsAny<AudioFormat>(), It.IsAny<SongInfo?>(), It.IsAny<string?>()))
-              .Returns("AL|T.flac");
+              .Returns("AL-T.flac");
 
         const string PerRunTemplate = "{album}|{title}";
         var opts = new ScanOptions(_inputDir, _outputDir) { NamingTemplate = PerRunTemplate };
@@ -765,7 +768,7 @@ public class FileProcessorTests : IDisposable
         var result = await sut.ProcessAsync(ucPath, opts);
 
         result.Outcome.Should().Be(ScanOutcome.Ok);
-        File.Exists(Path.Combine(_outputDir, "AL|T.flac")).Should().BeTrue();
+        File.Exists(Path.Combine(_outputDir, "AL-T.flac")).Should().BeTrue();
         naming.Verify(
             n => n.GetTargetName(ucPath, AudioFormat.Flac, It.Is<SongInfo?>(s => s != null && s.MusicId == 1), PerRunTemplate),
             Times.Once);

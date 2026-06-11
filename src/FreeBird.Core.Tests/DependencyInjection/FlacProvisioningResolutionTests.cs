@@ -39,13 +39,11 @@ public class FlacProvisioningResolutionTests
         r.Should().BeOfType<FlacBinaryResolver>();
     }
 
-    [Fact]
-    public void IFlacAutoInstaller_ResolvesAsNoOp()
-    {
-        using var c = BuildContainer();
-        var installer = c.Resolve<IFlacAutoInstaller>();
-        installer.Should().BeOfType<NoOpFlacAutoInstaller>();
-    }
+    // Note: the unconditional IFlacAutoInstaller_ResolvesAsNoOp test was removed
+    // because it failed on Windows runners (where CoreModule resolves
+    // WindowsFlacAutoInstaller instead). The macOS/Linux assertion is preserved
+    // by IFlacAutoInstaller_OnMacOS_RemainsNoOp below; the Windows assertion is
+    // covered by IFlacAutoInstaller_OnWindows_ResolvesAsWindowsInstaller.
 
     [Fact]
     public void FlacResolverOptions_HasNonEmptyAppBaseDirectory()
@@ -143,5 +141,19 @@ public class FlacProvisioningResolutionTests
         }
         using var c = BuildContainer();
         c.Resolve<IFlacAutoInstaller>().Should().BeOfType<NoOpFlacAutoInstaller>();
+    }
+
+    [Fact]
+    public void IFlacAutoInstaller_OnWindows_ResolvesAsWindowsInstaller()
+    {
+        // T15 positive guard: on Windows, CoreModule must swap the NoOp default
+        // for the real WindowsFlacAutoInstaller. Skipped on macOS/Linux where
+        // IFlacAutoInstaller_OnMacOS_RemainsNoOp asserts the negative branch.
+        if (!System.OperatingSystem.IsWindows())
+        {
+            return;
+        }
+        using var c = BuildContainer();
+        c.Resolve<IFlacAutoInstaller>().Should().BeOfType<WindowsFlacAutoInstaller>();
     }
 }

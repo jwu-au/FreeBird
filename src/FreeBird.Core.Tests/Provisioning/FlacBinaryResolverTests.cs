@@ -13,6 +13,13 @@ namespace FreeBird.Core.Tests.Provisioning;
 
 public class FlacBinaryResolverTests
 {
+    // Platform-aware binary names. On Windows, FlacBinaryResolver probes
+    // "flac.exe" / "metaflac.exe"; on macOS/Linux it probes the bare name.
+    // Tests that seed beside-paths or PathHits must mirror that convention
+    // or the resolver will return NotFound on Windows runners.
+    private static string FlacBin => OperatingSystem.IsWindows() ? "flac.exe" : "flac";
+    private static string MetaflacBin => OperatingSystem.IsWindows() ? "metaflac.exe" : "metaflac";
+
     private sealed class MockSetup
     {
         public Dictionary<string, MockFileData> Files = new();
@@ -82,56 +89,67 @@ public class FlacBinaryResolverTests
     [Fact]
     public async Task ResolveFlac_OverrideMissing_FallsBackToBeside()
     {
+        // Use a real IFileSystem's Path.Combine so the seeded key matches
+        // what FlacBinaryResolver computes internally (Path.Combine on Windows
+        // uses '\\' — string literal "/app/flac.exe" would not match).
+        var besideFs = new System.IO.Abstractions.FileSystem();
+        var besideKey = besideFs.Path.Combine("/app", FlacBin);
+
         var r = Build(s =>
         {
             s.FlacOverride = "/nonexistent/flac";
-            s.Files["/app/flac"] = new MockFileData("");
+            s.Files[besideKey] = new MockFileData("");
         });
 
         var result = await r.ResolveFlacAsync(CancellationToken.None);
 
-        result.Path.Should().Be("/app/flac");
+        result.Path.Should().Be(besideKey);
         result.Provenance.Should().Be(FlacBinaryProvenance.NextToExecutable);
     }
 
     [Fact]
     public async Task ResolveFlac_OverrideMissing_FallsBackToPathWhenNoBeside()
     {
+        var pathHit = $"/usr/bin/{FlacBin}";
         var r = Build(s =>
         {
             s.FlacOverride = "/nonexistent/flac";
-            s.PathHits["flac"] = "/usr/bin/flac";
+            s.PathHits[FlacBin] = pathHit;
         });
 
         var result = await r.ResolveFlacAsync(CancellationToken.None);
 
-        result.Path.Should().Be("/usr/bin/flac");
+        result.Path.Should().Be(pathHit);
         result.Provenance.Should().Be(FlacBinaryProvenance.Path);
     }
 
     [Fact]
     public async Task ResolveFlac_BesideWinsOverPath()
     {
+        var besideFs = new System.IO.Abstractions.FileSystem();
+        var besideKey = besideFs.Path.Combine("/app", FlacBin);
+
         var r = Build(s =>
         {
-            s.Files["/app/flac"] = new MockFileData("");
-            s.PathHits["flac"] = "/usr/bin/flac";
+            s.Files[besideKey] = new MockFileData("");
+            s.PathHits[FlacBin] = $"/usr/bin/{FlacBin}";
         });
 
         var result = await r.ResolveFlacAsync(CancellationToken.None);
 
-        result.Path.Should().Be("/app/flac");
+        result.Path.Should().Be(besideKey);
         result.Provenance.Should().Be(FlacBinaryProvenance.NextToExecutable);
     }
 
     [Fact]
     public async Task ResolveFlac_OnlyPathHas_ReturnsPathProvenance()
     {
-        var r = Build(s => { s.PathHits["flac"] = "/usr/bin/flac"; });
+        var pathHit = $"/usr/bin/{FlacBin}";
+        var r = Build(s => { s.PathHits[FlacBin] = pathHit; });
 
         var result = await r.ResolveFlacAsync(CancellationToken.None);
 
-        result.Path.Should().Be("/usr/bin/flac");
+        result.Path.Should().Be(pathHit);
         result.Provenance.Should().Be(FlacBinaryProvenance.Path);
     }
 
@@ -167,14 +185,15 @@ public class FlacBinaryResolverTests
     [Fact]
     public async Task ResolveMetaflac_NoOverride_UsesBesideAndPath()
     {
+        var pathHit = $"/usr/bin/{MetaflacBin}";
         var r = Build(s =>
         {
-            s.PathHits["metaflac"] = "/usr/bin/metaflac";
+            s.PathHits[MetaflacBin] = pathHit;
         });
 
         var result = await r.ResolveMetaflacAsync(CancellationToken.None);
 
-        result.Path.Should().Be("/usr/bin/metaflac");
+        result.Path.Should().Be(pathHit);
         result.Provenance.Should().Be(FlacBinaryProvenance.Path);
     }
 
@@ -197,15 +216,18 @@ public class FlacBinaryResolverTests
     [Fact]
     public async Task ResolveMetaflac_BesideFb_Wins()
     {
+        var besideFs = new System.IO.Abstractions.FileSystem();
+        var besideKey = besideFs.Path.Combine("/app", MetaflacBin);
+
         var r = Build(s =>
         {
-            s.Files["/app/metaflac"] = new MockFileData("");
-            s.PathHits["metaflac"] = "/usr/bin/metaflac";
+            s.Files[besideKey] = new MockFileData("");
+            s.PathHits[MetaflacBin] = $"/usr/bin/{MetaflacBin}";
         });
 
         var result = await r.ResolveMetaflacAsync(CancellationToken.None);
 
-        result.Path.Should().Be("/app/metaflac");
+        result.Path.Should().Be(besideKey);
         result.Provenance.Should().Be(FlacBinaryProvenance.NextToExecutable);
     }
 
@@ -345,9 +367,12 @@ public class FlacBinaryResolverTests
     [Fact]
     public async Task ResolveFlac_ProbeHits_NeverCallsInstaller()
     {
+        var besideFs = new System.IO.Abstractions.FileSystem();
+        var besideKey = besideFs.Path.Combine("/app", FlacBin);
+
         var (r, installer) = BuildWithInstaller(s =>
         {
-            s.Files["/app/flac"] = new MockFileData("");
+            s.Files[besideKey] = new MockFileData("");
             s.AutoInstallUrl = "https://x/flac.zip";  // even with URL, probe hit short-circuits
         });
 
@@ -388,10 +413,16 @@ public class PathEnvironmentTests
     [Fact]
     public void FindOnPath_HitsFirstMatch()
     {
+        // PathEnvironment.FindOnPath uses Path.Combine(segment, exeName) which
+        // produces backslash-joined paths on Windows. Seed the MockFileSystem
+        // with the same convention so the existence check matches.
+        var realFs = new System.IO.Abstractions.FileSystem();
+        var firstKey = realFs.Path.Combine("/usr/bin", "flac");
+        var secondKey = realFs.Path.Combine("/usr/local/bin", "flac");
         var fs = new MockFileSystem(new Dictionary<string, MockFileData>
         {
-            ["/usr/bin/flac"] = new MockFileData(""),
-            ["/usr/local/bin/flac"] = new MockFileData(""),
+            [firstKey] = new MockFileData(""),
+            [secondKey] = new MockFileData(""),
         });
         var prev = Environment.GetEnvironmentVariable("PATH");
         try
@@ -399,7 +430,7 @@ public class PathEnvironmentTests
             var sep = OperatingSystem.IsWindows() ? ';' : ':';
             Environment.SetEnvironmentVariable("PATH", $"/usr/bin{sep}/usr/local/bin");
             var env = new PathEnvironment(fs);
-            env.FindOnPath("flac").Should().Be("/usr/bin/flac");
+            env.FindOnPath("flac").Should().Be(firstKey);
         }
         finally { Environment.SetEnvironmentVariable("PATH", prev); }
     }
@@ -432,9 +463,14 @@ public class PathEnvironmentTests
     [Fact]
     public void FindOnPath_SkipsEmptySegments()
     {
+        // Seed using real Path.Combine for the same reason as HitsFirstMatch:
+        // on Windows the resolver computes "/usr/bin\\flac" which would not
+        // match a literal "/usr/bin/flac" dictionary key.
+        var realFs = new System.IO.Abstractions.FileSystem();
+        var key = realFs.Path.Combine("/usr/bin", "flac");
         var fs = new MockFileSystem(new Dictionary<string, MockFileData>
         {
-            ["/usr/bin/flac"] = new MockFileData(""),
+            [key] = new MockFileData(""),
         });
         var prev = Environment.GetEnvironmentVariable("PATH");
         try
@@ -442,7 +478,7 @@ public class PathEnvironmentTests
             var sep = OperatingSystem.IsWindows() ? ';' : ':';
             // Empty segment between separators
             Environment.SetEnvironmentVariable("PATH", $"{sep}{sep}/usr/bin{sep}");
-            new PathEnvironment(fs).FindOnPath("flac").Should().Be("/usr/bin/flac");
+            new PathEnvironment(fs).FindOnPath("flac").Should().Be(key);
         }
         finally { Environment.SetEnvironmentVariable("PATH", prev); }
     }
