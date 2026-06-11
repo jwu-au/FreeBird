@@ -98,7 +98,9 @@ public class WindowsAutoInstallE2ETests : IDisposable
         using var ms = new MemoryStream();
         using (var archive = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
         {
-            foreach (var entryName in new[] { "Win64/flac.exe", "Win64/metaflac.exe", "Win64/libFLAC.dll", "Win64/libFLAC++.dll" })
+            // v3.3.1: fixture must mirror real upstream Xiph layout (flac-1.5.0-win/ wrapper).
+            // Production Win64Files lookup expects this prefix; bare "Win64/X" yields 0 matches.
+            foreach (var entryName in new[] { "flac-1.5.0-win/Win64/flac.exe", "flac-1.5.0-win/Win64/metaflac.exe", "flac-1.5.0-win/Win64/libFLAC.dll", "flac-1.5.0-win/Win64/libFLAC++.dll" })
             {
                 var entry = archive.CreateEntry(entryName);
                 using var es = entry.Open();

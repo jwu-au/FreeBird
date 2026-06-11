@@ -5,6 +5,14 @@ All notable changes to FreeBird are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.2] — 2026-06-11
+
+### Fixed
+- **Windows CI E2E test fixture**: `WindowsAutoInstallE2ETests.BuildFixtureZip` was still building ZIPs with bare `Win64/flac.exe` entry names, mismatching the v3.3.1 production schema (`flac-1.5.0-win/Win64/flac.exe`). This caused the Windows-only E2E install test to fail with `Expected exit to be 0, but found 1` on every CI run since v3.3.1. (No production code change.)
+
+### Internal
+- Missed by v3.3.1 bulk sed because the fixture was in `FreeBird.Cli.Tests` (only `FreeBird.Core.Tests` was scoped).
+- Audited entire src tree (`grep -rn "Win64/flac.exe"`) — confirmed zero remaining stale fixtures.
 ## [3.3.1] — 2026-06-11
 
 ### Fixed
