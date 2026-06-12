@@ -68,7 +68,7 @@ public class WatchCommandTests : IDisposable
 
             exit.Should().Be(0);
             captured.Should().NotBeNull();
-            captured!.InputDir.Should().Be(_inputDir);
+            captured!.InputDirs.Should().BeEquivalentTo(new[] { _inputDir });
             captured.OutputDir.Should().Be(_outputDir);
         }
         finally
@@ -174,7 +174,7 @@ public class WatchCommandTests : IDisposable
 
             exit.Should().Be(0);
             captured.Should().NotBeNull();
-            captured!.InputDir.Should().Be(_inputDir);
+            captured!.InputDirs.Should().BeEquivalentTo(new[] { _inputDir });
             captured.OutputDir.Should().Be(_outputDir);
             captured.Integrity.Should().Be(IntegrityLevel.L3);
             captured.Concurrency.Should().Be(8);

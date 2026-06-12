@@ -290,7 +290,7 @@ public static class WatchCommand
 
             var opts = new WatchOptions
             {
-                InputDir = input,
+                InputDirs = new[] { input },
                 OutputDir = output,
                 Integrity = integrity,
                 Concurrency = concurrency,

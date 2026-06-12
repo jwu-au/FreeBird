@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using FreeBird.Core.Models;
 
 namespace FreeBird.Cli;
@@ -9,7 +10,7 @@ namespace FreeBird.Cli;
 /// </summary>
 public sealed class WatchOptions
 {
-    public required string InputDir { get; init; }
+    public required IReadOnlyList<string> InputDirs { get; init; }
     public required string OutputDir { get; init; }
     public IntegrityLevel Integrity { get; init; } = IntegrityLevel.Auto;
     public int Concurrency { get; init; } = 4;

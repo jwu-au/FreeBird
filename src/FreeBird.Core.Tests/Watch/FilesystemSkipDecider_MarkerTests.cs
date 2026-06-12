@@ -67,7 +67,7 @@ public sealed class FilesystemSkipDecider_MarkerTests : IDisposable
     {
         // MinFileSizeBytes = 1 so our tiny 3-byte sources clear the floor.
         return new WatchOptions(
-            InputDir: Path.Combine(root, "in"),
+            InputDirs: new[] { Path.Combine(root, "in") },
             OutputDir: Path.Combine(root, "out"),
             MinFileSizeBytes: 1);
     }

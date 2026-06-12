@@ -24,7 +24,7 @@ public class IMetadataOptionsTests
     [Fact]
     public void WatchOptions_ImplementsIMetadataOptions()
     {
-        var opts = new WatchOptions("in", "out");
+        var opts = new WatchOptions(new[] { "in" }, "out");
 
         var asMetadata = opts as IMetadataOptions;
 

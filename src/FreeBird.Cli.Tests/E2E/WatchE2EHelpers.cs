@@ -94,7 +94,7 @@ internal static class WatchE2EHelpers
     {
         return new WatchOptions
         {
-            InputDir = inputDir,
+            InputDirs = new[] { inputDir },
             OutputDir = outputDir,
             Integrity = FreeBird.Core.Models.IntegrityLevel.Off,
             Concurrency = 2,

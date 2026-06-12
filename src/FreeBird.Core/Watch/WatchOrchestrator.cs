@@ -18,7 +18,7 @@ namespace FreeBird.Core.Watch;
 /// <list type="number">
 ///   <item><description>Optional initial sweep via <see cref="IScanOrchestrator"/> (unless <see cref="WatchOptions.SkipInitialScan"/>).</description></item>
 ///   <item><description>Polling loop on <see cref="WatchOptions.PollInterval"/> (using injected <see cref="TimeProvider"/> so it's testable with <c>FakeTimeProvider</c>).</description></item>
-///   <item><description>Each cycle: enumerate <c>.uc</c>/<c>.uc!</c> in <see cref="WatchOptions.InputDir"/>, ask <see cref="ICompletionDetector"/> per file, ask <see cref="ISkipDecider"/> per stable file, then dispatch survivors through <see cref="IFileProcessor"/> via <see cref="Parallel.ForEachAsync(System.Collections.Generic.IEnumerable{string}, ParallelOptions, Func{string, CancellationToken, ValueTask})"/>.</description></item>
+///   <item><description>Each cycle: enumerate <c>.uc</c>/<c>.uc!</c> in <see cref="WatchOptions.InputDirs"/>, ask <see cref="ICompletionDetector"/> per file, ask <see cref="ISkipDecider"/> per stable file, then dispatch survivors through <see cref="IFileProcessor"/> via <see cref="Parallel.ForEachAsync(System.Collections.Generic.IEnumerable{string}, ParallelOptions, Func{string, CancellationToken, ValueTask})"/>.</description></item>
 ///   <item><description>Cycle lock prevents overlapping cycles; consecutive-skip counter drives debounced WARN→DEBUG→WARN-hint log levels.</description></item>
 ///   <item><description>Graceful <c>cancellationToken</c> stops scheduling new cycles; hard <c>hardAbortToken</c> is forwarded to <see cref="IFileProcessor"/> so in-flight work can be torn down on second SIGINT.</description></item>
 /// </list>
@@ -57,6 +57,17 @@ public sealed class WatchOrchestrator : IWatchOrchestrator
         CancellationToken hardAbortToken = default)
     {
         ArgumentNullException.ThrowIfNull(options);
+        if (options.InputDirs is null || options.InputDirs.Count != 1)
+        {
+            // v3.4: WatchOrchestrator handles a single input dir. Multi-input fan-out
+            // happens one level up in WatchSupervisor (T09/T10), which spawns one
+            // WatchOrchestrator instance per input dir.
+            throw new ArgumentException(
+                "WatchOrchestrator requires exactly one entry in WatchOptions.InputDirs; " +
+                "use WatchSupervisor for multi-input watches.",
+                nameof(options));
+        }
+        var inputDir = options.InputDirs[0];
 
         var sw = Stopwatch.StartNew();
         int ok = 0, skipped = 0, unknown = 0, integrityFailed = 0, errors = 0;
@@ -64,7 +75,7 @@ public sealed class WatchOrchestrator : IWatchOrchestrator
 
         _logger.Information(
             "Watch starting. Input={Input}, Output={Output}, PollInterval={Poll}, Concurrency={Concurrency}, StabilityChecks={Checks}, MinFileSizeBytes={Min}, SkipInitialScan={Skip}",
-            options.InputDir, options.OutputDir, options.PollInterval, options.Concurrency,
+            inputDir, options.OutputDir, options.PollInterval, options.Concurrency,
             options.StabilityChecks, options.MinFileSizeBytes, options.SkipInitialScan);
 
         // --- 1. Initial sweep (delegated to v1's IScanOrchestrator) ---
@@ -181,15 +192,18 @@ public sealed class WatchOrchestrator : IWatchOrchestrator
         CancellationToken softCt,
         CancellationToken hardCt)
     {
+        // v3.4: per-invariant in RunAsync, InputDirs has exactly one entry here.
+        var inputDir = options.InputDirs[0];
+
         // Enumerate candidate files (non-recursive).
         string[] candidates;
         try
         {
-            candidates = EnumerateSources(options.InputDir).ToArray();
+            candidates = EnumerateSources(inputDir).ToArray();
         }
         catch (DirectoryNotFoundException)
         {
-            _logger.Warning("Watch: input directory missing: {Dir}", options.InputDir);
+            _logger.Warning("Watch: input directory missing: {Dir}", inputDir);
             return;
         }
 
@@ -370,7 +384,7 @@ public sealed class WatchOrchestrator : IWatchOrchestrator
     /// Map watch options onto the v1 scan options used by IScanOrchestrator and IFileProcessor.
     /// </summary>
     private static ScanOptions ToScanOptions(WatchOptions w) => new(
-        InputDirectory: w.InputDir,
+        InputDirectory: w.InputDirs[0],
         OutputDirectory: w.OutputDir,
         Integrity: w.Integrity,
         Concurrency: w.Concurrency,

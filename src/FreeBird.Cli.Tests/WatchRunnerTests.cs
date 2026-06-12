@@ -44,7 +44,7 @@ public class WatchRunnerTests : IDisposable
 
     private WatchOptions MakeOpts(string? logFile = null, bool noLogFile = false, IntegrityLevel integrity = IntegrityLevel.Off) => new()
     {
-        InputDir = _inputDir,
+        InputDirs = new[] { _inputDir },
         OutputDir = _outputDir,
         Integrity = integrity,
         Concurrency = 2,
@@ -119,7 +119,7 @@ public class WatchRunnerTests : IDisposable
 
         var cli = new WatchOptions
         {
-            InputDir = _inputDir,
+            InputDirs = new[] { _inputDir },
             OutputDir = _outputDir,
             Integrity = IntegrityLevel.L1,
             Concurrency = 8,
@@ -136,7 +136,7 @@ public class WatchRunnerTests : IDisposable
 
         exit.Should().Be(0);
         captured.Should().NotBeNull();
-        captured!.InputDir.Should().Be(_inputDir);
+        captured!.InputDirs.Should().BeEquivalentTo(new[] { _inputDir });
         captured.OutputDir.Should().Be(_outputDir);
         captured.Integrity.Should().Be(IntegrityLevel.L1);
         captured.Concurrency.Should().Be(8);

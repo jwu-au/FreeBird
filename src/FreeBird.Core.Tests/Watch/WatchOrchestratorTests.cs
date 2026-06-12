@@ -49,7 +49,7 @@ public sealed class WatchOrchestratorTests : IDisposable
         long minFileSizeBytes = 1024)
     {
         return new WatchOptions(
-            InputDir: _inputDir,
+            InputDirs: new[] { _inputDir },
             OutputDir: _outputDir,
             Integrity: IntegrityLevel.Auto,
             Concurrency: concurrency,
@@ -552,6 +552,38 @@ public sealed class WatchOrchestratorTests : IDisposable
         ((Action)(() => _ = new WatchOrchestrator(scan, det, dec, null!, clk, log))).Should().Throw<ArgumentNullException>();
         ((Action)(() => _ = new WatchOrchestrator(scan, det, dec, proc, null!, log))).Should().Throw<ArgumentNullException>();
         ((Action)(() => _ = new WatchOrchestrator(scan, det, dec, proc, clk, null!))).Should().Throw<ArgumentNullException>();
+    }
+
+    // --- v3.4 T04: InputDirs cardinality invariant ---
+
+    [Fact]
+    public async Task RunAsync_InputDirsEmpty_ThrowsArgumentException()
+    {
+        var (sut, _, _, _, _, _, _) = MakeSut();
+        var options = new WatchOptions(
+            InputDirs: Array.Empty<string>(),
+            OutputDir: _outputDir,
+            SkipInitialScan: true);
+
+        Func<Task> act = () => sut.RunAsync(options, CancellationToken.None, CancellationToken.None);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .Where(e => e.Message.Contains("InputDirs"));
+    }
+
+    [Fact]
+    public async Task RunAsync_InputDirsMultiple_ThrowsArgumentException()
+    {
+        var (sut, _, _, _, _, _, _) = MakeSut();
+        var options = new WatchOptions(
+            InputDirs: new[] { _inputDir, _inputDir + "-2" },
+            OutputDir: _outputDir,
+            SkipInitialScan: true);
+
+        Func<Task> act = () => sut.RunAsync(options, CancellationToken.None, CancellationToken.None);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .Where(e => e.Message.Contains("WatchSupervisor"));
     }
 
     // --- Enumeration scope: non-recursive + extension filter ---

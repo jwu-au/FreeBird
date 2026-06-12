@@ -86,7 +86,7 @@ public class CycleLockE2ETests : IDisposable
         //    would suppress the DEBUG events we need to assert on.
         var opts = new WatchOptions
         {
-            InputDir = _inputDir,
+            InputDirs = new[] { _inputDir },
             OutputDir = _outputDir,
             Integrity = FreeBird.Core.Models.IntegrityLevel.Off,
             Concurrency = 2,

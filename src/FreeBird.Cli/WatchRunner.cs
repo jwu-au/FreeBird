@@ -79,13 +79,13 @@ public sealed class WatchRunner
             return ExitBadArgs;
         }
 
-        if (!Directory.Exists(cliOptions.InputDir))
+        if (!Directory.Exists(cliOptions.InputDirs[0]))
         {
             using var bootstrap = new LoggerConfiguration()
                 .MinimumLevel.Is(LogEventLevel.Information)
                 .WriteTo.Console()
                 .CreateLogger();
-            bootstrap.Error("Input directory not found: {Input}", cliOptions.InputDir);
+            bootstrap.Error("Input directory not found: {Input}", cliOptions.InputDirs[0]);
             return ExitBadArgs;
         }
 
@@ -96,7 +96,7 @@ public sealed class WatchRunner
         {
             logger.Information(
                 "Watch starting. Input={Input}, Output={Output}, Integrity={Integrity}, Concurrency={Concurrency}, PollInterval={PollInterval}, StabilityChecks={Checks}, MinFileSize={MinSize}, SkipInitialScan={SkipInitial}",
-                cliOptions.InputDir, cliOptions.OutputDir, cliOptions.Integrity,
+                cliOptions.InputDirs[0], cliOptions.OutputDir, cliOptions.Integrity,
                 cliOptions.Concurrency, cliOptions.PollInterval, cliOptions.StabilityChecks,
                 cliOptions.MinFileSize, cliOptions.SkipInitialScan);
 
@@ -318,7 +318,7 @@ public sealed class WatchRunner
     }
 
     private static FreeBird.Core.Models.WatchOptions ToCoreOptions(WatchOptions cli) => new(
-        InputDir: cli.InputDir,
+        InputDirs: cli.InputDirs,
         OutputDir: cli.OutputDir,
         Integrity: cli.Integrity,
         Concurrency: cli.Concurrency,

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using FreeBird.Core.Abstractions;
 
 namespace FreeBird.Core.Models;
@@ -10,7 +11,7 @@ namespace FreeBird.Core.Models;
 public sealed record WatchOptions : IMetadataOptions
 {
     public WatchOptions(
-        string InputDir,
+        IReadOnlyList<string> InputDirs,
         string OutputDir,
         IntegrityLevel Integrity = IntegrityLevel.Auto,
         int Concurrency = 4,
@@ -20,7 +21,7 @@ public sealed record WatchOptions : IMetadataOptions
         long MinFileSizeBytes = 1024,
         bool SkipInitialScan = false)
     {
-        ArgumentNullException.ThrowIfNull(InputDir);
+        ArgumentNullException.ThrowIfNull(InputDirs);
         ArgumentNullException.ThrowIfNull(OutputDir);
 
         var poll = PollInterval ?? TimeSpan.FromSeconds(5);
@@ -31,7 +32,7 @@ public sealed record WatchOptions : IMetadataOptions
         ArgumentOutOfRangeException.ThrowIfNegative(StabilityChecks);
         ArgumentOutOfRangeException.ThrowIfNegative(MinFileSizeBytes);
 
-        this.InputDir = InputDir;
+        this.InputDirs = InputDirs;
         this.OutputDir = OutputDir;
         this.Integrity = Integrity;
         this.Concurrency = Concurrency;
@@ -42,7 +43,7 @@ public sealed record WatchOptions : IMetadataOptions
         this.SkipInitialScan = SkipInitialScan;
     }
 
-    public string InputDir { get; init; }
+    public IReadOnlyList<string> InputDirs { get; init; }
     public string OutputDir { get; init; }
     public IntegrityLevel Integrity { get; init; }
     public int Concurrency { get; init; }

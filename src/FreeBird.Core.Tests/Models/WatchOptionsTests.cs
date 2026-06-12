@@ -8,9 +8,9 @@ public class WatchOptionsTests
     [Fact]
     public void Defaults_ProduceExpectedValues()
     {
-        var opts = new WatchOptions("in", "out");
+        var opts = new WatchOptions(new[] { "in" }, "out");
 
-        opts.InputDir.Should().Be("in");
+        opts.InputDirs.Should().BeEquivalentTo(new[] { "in" });
         opts.OutputDir.Should().Be("out");
         opts.Integrity.Should().Be(IntegrityLevel.Auto);
         opts.Concurrency.Should().Be(4);
@@ -24,7 +24,7 @@ public class WatchOptionsTests
     [Fact]
     public void WithBlocks_AreImmutable()
     {
-        var a = new WatchOptions("in", "out");
+        var a = new WatchOptions(new[] { "in" }, "out");
         var b = a with { Concurrency = 8, SkipInitialScan = true };
 
         a.Concurrency.Should().Be(4);
@@ -35,7 +35,7 @@ public class WatchOptionsTests
     }
 
     [Fact]
-    public void Required_InputDir_NullThrows()
+    public void Required_InputDirs_NullThrows()
     {
         Action act = () => new WatchOptions(null!, "out");
         act.Should().Throw<ArgumentNullException>();
@@ -44,35 +44,35 @@ public class WatchOptionsTests
     [Fact]
     public void Required_OutputDir_NullThrows()
     {
-        Action act = () => new WatchOptions("in", null!);
+        Action act = () => new WatchOptions(new[] { "in" }, null!);
         act.Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
     public void Negative_PollInterval_Throws()
     {
-        Action act = () => new WatchOptions("in", "out", PollInterval: TimeSpan.FromSeconds(-1));
+        Action act = () => new WatchOptions(new[] { "in" }, "out", PollInterval: TimeSpan.FromSeconds(-1));
         act.Should().Throw<ArgumentOutOfRangeException>();
     }
 
     [Fact]
     public void Negative_StabilityChecks_Throws()
     {
-        Action act = () => new WatchOptions("in", "out", StabilityChecks: -1);
+        Action act = () => new WatchOptions(new[] { "in" }, "out", StabilityChecks: -1);
         act.Should().Throw<ArgumentOutOfRangeException>();
     }
 
     [Fact]
     public void Negative_MinFileSizeBytes_Throws()
     {
-        Action act = () => new WatchOptions("in", "out", MinFileSizeBytes: -1);
+        Action act = () => new WatchOptions(new[] { "in" }, "out", MinFileSizeBytes: -1);
         act.Should().Throw<ArgumentOutOfRangeException>();
     }
 
     [Fact]
     public void Defaults_FiveMetadataFields_MatchSpec()
     {
-        var opts = new WatchOptions("in", "out");
+        var opts = new WatchOptions(new[] { "in" }, "out");
 
         opts.NamingTemplate.Should().Be("{artist} - {title}");
         opts.Offline.Should().BeFalse();
@@ -84,7 +84,7 @@ public class WatchOptionsTests
     [Fact]
     public void WithBlocks_OverrideMetadataFields()
     {
-        var a = new WatchOptions("in", "out");
+        var a = new WatchOptions(new[] { "in" }, "out");
         var b = a with
         {
             NamingTemplate = "{musicId}",

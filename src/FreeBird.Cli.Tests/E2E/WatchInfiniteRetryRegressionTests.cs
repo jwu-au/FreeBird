@@ -169,7 +169,7 @@ public class WatchInfiniteRetryRegressionTests : IDisposable
     {
         return new WatchOptions
         {
-            InputDir = inputDir,
+            InputDirs = new[] { inputDir },
             OutputDir = outputDir,
             Integrity = IntegrityLevel.L1,
             Concurrency = 2,

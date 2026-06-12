@@ -59,7 +59,7 @@ public sealed class FilesystemSkipDeciderTests : IDisposable
     private static WatchOptions OptionsFor(string root, long minSize = 1024)
     {
         return new WatchOptions(
-            InputDir: Path.Combine(root, "in"),
+            InputDirs: new[] { Path.Combine(root, "in") },
             OutputDir: Path.Combine(root, "out"),
             MinFileSizeBytes: minSize);
     }
