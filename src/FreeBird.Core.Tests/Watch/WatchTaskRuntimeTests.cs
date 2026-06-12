@@ -152,19 +152,23 @@ public sealed class WatchTaskRuntimeTests : IDisposable
     {
         var dir = NewTempDir();
         var input = MakeInput(dir);
+        var entered = new TaskCompletionSource();
         var mockOrch = new Mock<IWatchOrchestrator>();
         mockOrch
             .Setup(o => o.RunAsync(It.IsAny<WatchOptions>(), It.IsAny<CancellationToken>(), It.IsAny<CancellationToken>()))
             .Returns<WatchOptions, CancellationToken, CancellationToken>(async (_, ct, _) =>
             {
+                entered.TrySetResult();
                 await Task.Delay(Timeout.Infinite, ct).ConfigureAwait(false);
                 return MakeSummary();
             });
         var task = new WatchTask(input, () => mockOrch.Object, new FakeTimeProvider(), _silentLogger);
 
         var run = task.RunAsync(MakeOptions(dir, NewTempDir()), CancellationToken.None);
-        // Give the orchestrator a moment to actually enter the Task.Delay.
-        await WaitFor(() => task.GetType() != null && IsRunning(run), "RunAsync to be in-flight");
+        // Wait for the orchestrator to actually enter its Task.Delay (so _taskCts is set
+        // and the awaiter is registered) before invoking Cancel — eliminates the race
+        // where Cancel() fires before the linked CTS exists.
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         task.Cancel();
 
         Func<Task> act = () => run;
@@ -320,17 +324,4 @@ public sealed class WatchTaskRuntimeTests : IDisposable
         task.State.Should().Be(WatchTaskState.Active);
     }
 
-    // ---- helpers ----
-    private static bool IsRunning(Task t) => !t.IsCompleted;
-
-    private static async Task WaitFor(Func<bool> condition, string description, TimeSpan? timeout = null)
-    {
-        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
-        while (DateTime.UtcNow < deadline)
-        {
-            if (condition()) return;
-            await Task.Delay(10);
-        }
-        throw new TimeoutException($"Timeout waiting for {description}");
-    }
 }
