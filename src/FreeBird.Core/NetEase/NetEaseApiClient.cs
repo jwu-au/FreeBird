@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using FreeBird.Core.Abstractions;
 using FreeBird.Core.Metadata;
 using FreeBird.Core.Metadata.Internal;
+using FreeBird.Core.Watch;
 using Serilog;
 
 namespace FreeBird.Core.NetEase;
@@ -35,16 +36,27 @@ public sealed class NetEaseApiClient : INetEaseApiClient
 
     private readonly HttpClient _http;
     private readonly ILogger _log;
+    // v3.4 T02: dual-gate. Rate bucket FIRST (bounded wait, max ~1/rate seconds),
+    // then concurrency semaphore (unbounded wait, held for the duration of the
+    // actual HTTP work). Ordering rationale documented in plan §M5.
+    private readonly ITokenBucketRateLimiter _rateBucket;
+    private readonly IGlobalApiRateLimiter _concurrencyGate;
     // Spec §5: both id and ids must be present; ids is URL-encoded [id].
     // Built per-instance so the FB_NETEASE_BASEURL test seam is observed at ctor time
     // (a static initializer would capture once per process and break sequential E2E
     // tests that need different stub ports).
     private readonly string _urlFormat;
 
-    public NetEaseApiClient(HttpClient http, ILogger log)
+    public NetEaseApiClient(
+        HttpClient http,
+        ILogger log,
+        ITokenBucketRateLimiter rateBucket,
+        IGlobalApiRateLimiter concurrencyGate)
     {
         _http = http;
         _log = log.ForContext<NetEaseApiClient>();
+        _rateBucket = rateBucket;
+        _concurrencyGate = concurrencyGate;
         _urlFormat = BuildUrlFormat();
     }
 
@@ -68,6 +80,14 @@ public sealed class NetEaseApiClient : INetEaseApiClient
 
         try
         {
+            // v3.4 T02 dual-gate (rate bucket FIRST, then concurrency semaphore).
+            // The linked CTS combines the user's CT with the per-request timeout,
+            // so a timeout while waiting in either gate naturally surfaces as
+            // OperationCanceledException and is mapped to NetEaseApiResult.Timeout
+            // below.
+            await _rateBucket.AcquireAsync(linkedCts.Token).ConfigureAwait(false);
+            using var slot = await _concurrencyGate.AcquireAsync(linkedCts.Token).ConfigureAwait(false);
+
             using var response = await _http.GetAsync(url, linkedCts.Token).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
             var json = await response.Content.ReadAsStringAsync(linkedCts.Token).ConfigureAwait(false);

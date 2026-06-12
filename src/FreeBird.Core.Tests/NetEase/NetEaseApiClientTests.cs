@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using FreeBird.Core.Metadata;
 using FreeBird.Core.NetEase;
+using FreeBird.Core.Watch;
 using Serilog;
 
 namespace FreeBird.Core.Tests.NetEase;
@@ -46,6 +47,12 @@ public class NetEaseApiClientTests
     }
 
     private static ILogger NullLogger() => new LoggerConfiguration().CreateLogger();
+
+    // v3.4 T02: the production NetEaseApiClient ctor now requires two limiters.
+    // For these tests the limiters must be no-ops (callsPerSecond=0 = unlimited,
+    // ample concurrency cap) so behavior is identical to pre-T02.
+    private static ITokenBucketRateLimiter UnlimitedRate() => new TokenBucketRateLimiter(callsPerSecond: 0);
+    private static IGlobalApiRateLimiter UnlimitedConcurrency() => new GlobalApiRateLimiter(maxConcurrency: 100);
 
     private static CapturingHandler RespondWith(HttpStatusCode status, string body)
     {
@@ -98,7 +105,7 @@ public class NetEaseApiClientTests
     public async Task Returns_Success_OnValid200WithSongs()
     {
         var handler = RespondWith(HttpStatusCode.OK, ValidJsonOneSong);
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger());
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency());
 
         var result = await sut.GetSongDetailAsync(3367798042L, DefaultTimeout, CancellationToken.None);
 
@@ -113,7 +120,7 @@ public class NetEaseApiClientTests
     public async Task Returns_NotFound_When_SongsArrayEmpty()
     {
         var handler = RespondWith(HttpStatusCode.OK, EmptySongsJson);
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger());
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency());
 
         var result = await sut.GetSongDetailAsync(42L, DefaultTimeout, CancellationToken.None);
 
@@ -126,7 +133,7 @@ public class NetEaseApiClientTests
     {
         var handler = new CapturingHandler((req, ct) =>
             throw new HttpRequestException("connection refused"));
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger());
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency());
 
         var result = await sut.GetSongDetailAsync(42L, DefaultTimeout, CancellationToken.None);
 
@@ -145,7 +152,7 @@ public class NetEaseApiClientTests
                 Content = new StringContent(ValidJsonOneSong),
             };
         });
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger());
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency());
 
         var result = await sut.GetSongDetailAsync(
             42L,
@@ -159,7 +166,7 @@ public class NetEaseApiClientTests
     public async Task Returns_DeserializationError_OnMalformedJson()
     {
         var handler = RespondWith(HttpStatusCode.OK, "not json");
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger());
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency());
 
         var result = await sut.GetSongDetailAsync(42L, DefaultTimeout, CancellationToken.None);
 
@@ -171,7 +178,7 @@ public class NetEaseApiClientTests
     public async Task Returns_Success_WithNullAlbum_WhenAlbumFieldMissing()
     {
         var handler = RespondWith(HttpStatusCode.OK, ValidJsonNoAlbum);
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger());
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency());
 
         var result = await sut.GetSongDetailAsync(3367798042L, DefaultTimeout, CancellationToken.None);
 
@@ -184,7 +191,7 @@ public class NetEaseApiClientTests
     public async Task RequestUri_ExactlyMatches_SpecFormat()
     {
         var handler = RespondWith(HttpStatusCode.OK, ValidJsonOneSong);
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger());
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency());
 
         await sut.GetSongDetailAsync(3367798042L, DefaultTimeout, CancellationToken.None);
 
@@ -197,7 +204,7 @@ public class NetEaseApiClientTests
     public async Task Request_IncludesUserAgent_FromSingletonClient()
     {
         var handler = RespondWith(HttpStatusCode.OK, ValidJsonOneSong);
-        var sut = new NetEaseApiClient(BuildClient(handler, withUserAgent: true), NullLogger());
+        var sut = new NetEaseApiClient(BuildClient(handler, withUserAgent: true), NullLogger(), UnlimitedRate(), UnlimitedConcurrency());
 
         await sut.GetSongDetailAsync(3367798042L, DefaultTimeout, CancellationToken.None);
 
@@ -220,7 +227,7 @@ public class NetEaseApiClientTests
                 Content = new StringContent(ValidJsonOneSong),
             };
         });
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger());
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency());
 
         using var cts = new CancellationTokenSource();
         cts.Cancel(); // pre-cancelled
