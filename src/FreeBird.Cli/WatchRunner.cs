@@ -79,16 +79,8 @@ public sealed class WatchRunner
             return ExitBadArgs;
         }
 
-        if (!Directory.Exists(cliOptions.InputDirs[0]))
-        {
-            using var bootstrap = new LoggerConfiguration()
-                .MinimumLevel.Is(LogEventLevel.Information)
-                .WriteTo.Console()
-                .CreateLogger();
-            bootstrap.Error("Input directory not found: {Input}", cliOptions.InputDirs[0]);
-            return ExitBadArgs;
-        }
-
+        // T16: v3.4 supervisor path validates each input directory itself (invalid entries
+        // become born-DEAD tasks logged at WARN). No eager pre-check here.
         Directory.CreateDirectory(cliOptions.OutputDir);
 
         ILogger logger = BuildLogger(cliOptions);
@@ -102,7 +94,6 @@ public sealed class WatchRunner
 
             var coreOptions = ToCoreOptions(cliOptions);
 
-            IWatchOrchestrator orchestrator;
             IContainer? container = null;
             ILifetimeScope? scope = null;
             CancellationCoordinator? coordinator = null;
@@ -111,28 +102,33 @@ public sealed class WatchRunner
 
             try
             {
-                if (OrchestratorFactoryOverride is not null)
-                {
-                    orchestrator = OrchestratorFactoryOverride(logger);
-                }
-                else
-                {
-                    // T15: resolve flac provisioning options from CLI flags + env vars BEFORE
-                    // building the container so the FlacResolverOptions override sees the final
-                    // values (CLI flag > env var > default).
-                    var flacOptions = FlacOptionsBinder.Resolve(
-                        cliOptions.FlacBin,
-                        cliOptions.FlacUrl,
-                        cliOptions.NoAutoDownload,
-                        Environment.GetEnvironmentVariable("FREEBIRD_FLAC_URL"),
-                        Environment.GetEnvironmentVariable("FREEBIRD_NO_AUTO_DOWNLOAD"));
+                // T16: always build the container, even when OrchestratorFactoryOverride is set.
+                // The supervisor path resolves WatchSupervisor + Func<WatchInput, WatchTask> from
+                // the container; the override (if any) is wired in as the IWatchOrchestrator
+                // registration so each WatchTask's Func<IWatchOrchestrator> resolves the mock.
+                //
+                // T15: resolve flac provisioning options from CLI flags + env vars BEFORE
+                // building the container so the FlacResolverOptions override sees the final
+                // values (CLI flag > env var > default).
+                var flacOptions = FlacOptionsBinder.Resolve(
+                    cliOptions.FlacBin,
+                    cliOptions.FlacUrl,
+                    cliOptions.NoAutoDownload,
+                    Environment.GetEnvironmentVariable("FREEBIRD_FLAC_URL"),
+                    Environment.GetEnvironmentVariable("FREEBIRD_NO_AUTO_DOWNLOAD"));
 
-                    container = BuildContainer(logger, flacOptions);
-                    scope = container.BeginLifetimeScope();
+                container = BuildContainer(logger, flacOptions);
+                scope = container.BeginLifetimeScope();
 
-                    // T13 / parity with ScanRunner D2+D3+D4: probe flac at startup so we can
-                    // fail fast for --integrity l3 when the binary is missing, and emit a
-                    // one-time warning for --integrity auto's silent L1 degradation.
+                // T13 / parity with ScanRunner D2+D3+D4: probe flac at startup so we can
+                // fail fast for --integrity l3 when the binary is missing, and emit a
+                // one-time warning for --integrity auto's silent L1 degradation.
+                //
+                // Skipped when OrchestratorFactoryOverride is set: tests using the override
+                // typically don't care about flac, and forcing them to register IFlacProbe
+                // would break the existing minimal-mock contract.
+                if (OrchestratorFactoryOverride is null)
+                {
                     var probe = scope.Resolve<IFlacProbe>();
                     var flacAvailable = await probe.IsAvailableAsync(externalToken).ConfigureAwait(false);
 
@@ -148,9 +144,23 @@ public sealed class WatchRunner
                         logger.Warning(
                             "--integrity auto: 'flac' binary not found on PATH; falling back to L1 (structural check only) for FLAC files. Install flac for full PCM-MD5 verification.");
                     }
-
-                    orchestrator = scope.Resolve<IWatchOrchestrator>();
                 }
+
+                var supervisor = scope.Resolve<FreeBird.Core.Watch.WatchSupervisor>();
+                var taskFactory = scope.Resolve<Func<FreeBird.Core.Watch.WatchInput, FreeBird.Core.Watch.WatchTask>>();
+
+                var (validInputs, _invalidInputs) = supervisor.ParseAndValidateInputs(cliOptions.InputDirs);
+                if (validInputs.Count == 0)
+                {
+                    // Per spec §2.5 watch with all-invalid inputs is a born-DEAD no-op, not a
+                    // hard error. The supervisor has already logged each invalid entry at WARN.
+                    logger.Warning("watch: no valid input directories; nothing to watch — exiting cleanly");
+                    Console.Out.WriteLine(
+                        "Watch summary: Processed=0, Ok=0, Skipped=0, UnknownFormat=0, IntegrityFailed=0, Errors=0, Duration=00:00:00");
+                    return ExitOk;
+                }
+
+                var tasks = supervisor.CreateTasks(validInputs);
 
                 coordinator = CoordinatorFactoryOverride is not null
                     ? CoordinatorFactoryOverride(logger)
@@ -162,15 +172,25 @@ public sealed class WatchRunner
                 // here would double-count signals (once via the bridge, once via our own
                 // Console.CancelKeyPress handler) and immediately escalate to hard abort,
                 // bypassing the 5s graceful drain. Instead, link the external token into the
-                // graceful token so an external host CTS still stops the orchestrator gracefully.
+                // graceful token so an external host CTS still stops the supervisor gracefully.
                 sigintRegistration = SubscribeSigint(coordinator);
                 sigtermRegistration = SubscribeSigterm(coordinator);
                 using var linkedGraceful = CancellationTokenSource.CreateLinkedTokenSource(
-                    coordinator.Graceful, externalToken);
+                    coordinator.Graceful, coordinator.Hard, externalToken);
+
+                // T16: probe stops when supervisor finishes naturally OR when an external
+                // cancel fires. Linked CTS lets the runner explicitly stop the probe after
+                // supervisor.RunAsync returns without waiting for the user to Ctrl-C again.
+                using var probeStopCts = CancellationTokenSource.CreateLinkedTokenSource(linkedGraceful.Token);
+
+                var timeProvider = scope.Resolve<TimeProvider>();
+                var healthProbe = new FreeBird.Core.Watch.HealthProbe(
+                    supervisor, timeProvider, logger, coreOptions.HealthProbeInterval);
+                var probeTask = healthProbe.RunAsync(probeStopCts.Token);
 
                 try
                 {
-                    var summary = await orchestrator.RunAsync(coreOptions, linkedGraceful.Token, coordinator.Hard).ConfigureAwait(false);
+                    var summary = await supervisor.RunAsync(tasks, coreOptions, linkedGraceful.Token).ConfigureAwait(false);
 
                     Console.Out.WriteLine(
                         $"Watch summary: Processed={summary.Processed}, Ok={summary.Ok}, Skipped={summary.Skipped}, " +
@@ -182,10 +202,19 @@ public sealed class WatchRunner
                 }
                 catch (OperationCanceledException) when (coordinator.SignalCount > 0)
                 {
-                    // Hard-cancel mid-flight. WatchOrchestrator normally returns a partial summary
+                    // Hard-cancel mid-flight. Supervisor normally returns a partial summary
                     // on cancel; this catch defends against any cancel-throw path that still leaks.
                     logger.Warning("Watch aborted by user signal.");
                     return ExitCancelled;
+                }
+                finally
+                {
+                    // Stop the probe ticker and wait for it to drain. RunAsync swallows OCE,
+                    // but defend against a leaking exception so the finally never throws.
+                    probeStopCts.Cancel();
+                    try { await probeTask.ConfigureAwait(false); }
+                    catch (OperationCanceledException) { }
+                    catch (Exception ex) { logger.Warning(ex, "health probe drain raised; ignored"); }
                 }
             }
             finally
@@ -353,6 +382,18 @@ public sealed class WatchRunner
             AutoInstallUrl = flacOptions.AutoInstallUrl,
             DisableAutoInstall = flacOptions.DisableAutoInstall,
         }).AsSelf().SingleInstance();
+
+        // T16: if OrchestratorFactoryOverride is set, register the resulting mock as the
+        // IWatchOrchestrator. The supervisor's per-task WatchTask resolves a
+        // Func<IWatchOrchestrator> from the container (auto-synthesised by Autofac), so this
+        // override flows through to every WatchTask without changing the test contract.
+        if (OrchestratorFactoryOverride is not null)
+        {
+            var ovr = OrchestratorFactoryOverride;
+            builder.Register(_ => ovr(logger))
+                   .As<IWatchOrchestrator>()
+                   .InstancePerDependency();
+        }
 
         // T18 test hook: let tests override individual registrations after the default
         // wiring is in place (Autofac's last-registration-wins behavior makes the override

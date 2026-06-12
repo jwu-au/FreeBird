@@ -229,6 +229,29 @@ public sealed class CoreModule : Module
                .As<FreeBird.Core.Provisioning.IHttpDownloader>()
                .SingleInstance();
 
+        // v3.4 T16 — Multi-input watch infrastructure.
+        //
+        // WatchSupervisor: process-wide singleton. One per `fb watch` invocation; owns the
+        // list of WatchTask instances + the per-task lifecycle (start, drain, isolate crashes).
+        // Singleton so HealthProbe and the CLI host see the same instance.
+        //
+        // WatchTask: transient. One per WatchInput (i.e. per input directory). Registered
+        // AsSelf so Autofac auto-generates a Func<WatchInput, WatchTask> factory (Autofac
+        // synthesises Func<X, Y> for any registered Y whose ctor takes X plus container-
+        // resolvable params). The Func<IWatchOrchestrator> ctor param on WatchTask is
+        // likewise auto-synthesised — IWatchOrchestrator is already registered via the
+        // IDependency assembly scan above.
+        //
+        // HealthProbe is NOT registered: its ctor takes a TimeSpan (the probe interval) which
+        // cannot be auto-resolved. WatchRunner constructs it manually after resolving its
+        // peer dependencies from the container.
+        builder.RegisterType<FreeBird.Core.Watch.WatchSupervisor>()
+               .AsSelf()
+               .SingleInstance();
+
+        builder.RegisterType<FreeBird.Core.Watch.WatchTask>()
+               .AsSelf();
+
         // T15 — OS-conditional installer swap. On Windows we override the auto-scanned
         // NoOpFlacAutoInstaller with WindowsFlacAutoInstaller via Autofac's
         // last-registration-wins semantics. On macOS / Linux the auto-scan-registered
