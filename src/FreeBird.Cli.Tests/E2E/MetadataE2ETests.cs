@@ -25,11 +25,11 @@ namespace FreeBird.Cli.Tests.E2E;
 ///     embedded FLAC tags via <c>metaflac --list</c>.
 ///
 /// Marked [Trait("Category","E2E")] for opt-out via
-/// <c>dotnet test --filter "Category!=E2E"</c>. Marked [Collection("ConsoleRedirect")]
+/// <c>dotnet test --filter "Category!=E2E"</c>. Marked [Collection("RunnerOverride")]
 /// because ScanRunner writes to Console and other suites already serialize on this
 /// collection; we also mutate the FB_NETEASE_BASEURL process-global env var here.
 /// </summary>
-[Collection("ConsoleRedirect")]
+[Collection("RunnerOverride")]
 [Trait("Category", "E2E")]
 public class MetadataE2ETests
 {

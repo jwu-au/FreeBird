@@ -18,7 +18,7 @@ namespace FreeBird.Cli.Tests;
 /// Shares <c>ConsoleRedirect</c> collection with <see cref="WatchCommandTests"/> to prevent
 /// the two suites from racing on <c>Console.Out</c>.
 /// </summary>
-[Collection("ConsoleRedirect")]
+[Collection("RunnerOverride")]
 public class WatchRunnerTests : IDisposable
 {
     private readonly string _tempDir;

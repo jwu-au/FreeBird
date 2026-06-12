@@ -12,7 +12,7 @@ namespace FreeBird.Cli.Tests;
 /// T20: full end-to-end tests using real audio fixtures through the entire CLI pipeline.
 /// Verifies XOR roundtrip integrity and output file structure for MP3 and FLAC.
 /// </summary>
-[Collection("ConsoleRedirect")]
+[Collection("RunnerOverride")]
 public class ScanRunnerEndToEndTests : IDisposable
 {
     private readonly string _tempDir;

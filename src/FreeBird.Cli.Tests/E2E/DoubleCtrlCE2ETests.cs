@@ -26,7 +26,7 @@ namespace FreeBird.Cli.Tests.E2E;
 /// fb watch children in parallel can race on signal-delivery scheduling and create flaky
 /// false-failures on the SIGINT-driven assertions here.
 /// </summary>
-[Collection("ConsoleRedirect")]
+[Collection("RunnerOverride")]
 public class DoubleCtrlCE2ETests : IDisposable
 {
     private readonly string _tempDir;

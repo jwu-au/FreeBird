@@ -14,7 +14,7 @@ namespace FreeBird.Cli.Tests;
 /// T21: end-to-end tests covering the L3 (real `flac -t`) integrity path.
 /// Auto-skipped when the `flac` binary is not on PATH.
 /// </summary>
-[Collection("ConsoleRedirect")]
+[Collection("RunnerOverride")]
 public class ScanRunnerL3Tests : IDisposable
 {
     private readonly string _tempDir;

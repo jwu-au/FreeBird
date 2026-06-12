@@ -33,7 +33,7 @@ namespace FreeBird.Cli.Tests.E2E;
 ///
 /// Marked <c>Category=E2E</c> — see <see cref="WatchE2EHelpers"/> for rationale.
 /// </summary>
-[Collection("ConsoleRedirect")]
+[Collection("RunnerOverride")]
 public class CycleLockE2ETests : IDisposable
 {
     private readonly string _tempDir;

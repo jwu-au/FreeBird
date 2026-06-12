@@ -25,7 +25,7 @@ namespace FreeBird.Cli.Tests.E2E;
 /// (derived from the source stem, e.g. <c>42-song.mp3</c>) rather than going through
 /// the metadata-aware namer which would need a network round-trip.
 /// </summary>
-[Collection("ConsoleRedirect")]
+[Collection("RunnerOverride")]
 public class ScanMultiInputE2ETests : IDisposable
 {
     private readonly string _tempDir;

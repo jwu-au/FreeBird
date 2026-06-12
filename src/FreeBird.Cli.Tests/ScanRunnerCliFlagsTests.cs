@@ -15,7 +15,7 @@ namespace FreeBird.Cli.Tests;
 /// parsing + validation (run via <see cref="CliRoot"/> with <see cref="ScanRunner.RunnerOverride"/>
 /// to capture the resolved <see cref="ScanOptions"/> without running the orchestrator).
 /// </summary>
-[Collection("ConsoleRedirect")]
+[Collection("RunnerOverride")]
 public class ScanRunnerCliFlagsTests : IDisposable
 {
     private readonly string _tempDir;

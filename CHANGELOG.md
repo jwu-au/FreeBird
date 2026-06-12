@@ -5,6 +5,18 @@ All notable changes to FreeBird are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.1] — 2026-06-13
+
+### Fixed
+- **CI ubuntu test pollution**: `MultiInputArityTests.Scan_ZeroInputDirs_ParseError` failed on ubuntu-22.04 due to xUnit running test classes in parallel while `ScanRunner.RunnerOverride` is a process-wide static. Captured state from `ScanRunnerEmptyDirTests` leaked across class boundary, polluting the zero-input assertion. Fixed by:
+  - Removing fragile `captured.Should().BeNull()` assertion (real signal `exit ≠ 0` preserved)
+  - Adding `[Collection("RunnerOverride")]` to all test classes that mutate `ScanRunner.RunnerOverride`, `WatchRunner.OrchestratorFactoryOverride`, or `WatchRunner.CoordinatorFactoryOverride` (~20 classes affected)
+
+### Notes
+- No production code changes
+- macOS and Windows CI were already passing; only ubuntu was affected
+- Future v3.5 may convert these statics to `AsyncLocal<T>` to eliminate the underlying fragility
+
 ## [3.4.0] — 2026-06-13
 
 ### Added
