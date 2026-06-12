@@ -13,6 +13,7 @@ using FreeBird.Core.Models;
 using FreeBird.Core.Processing;
 using FreeBird.Core.Provisioning;
 using FreeBird.Core.Sidecar;
+using FreeBird.Core.Watch;
 using Moq;
 using Serilog;
 using Fx = FreeBird.Core.Tests.Fixtures.Fixtures;
@@ -94,7 +95,10 @@ public class FileProcessorTests : IDisposable
         // _outputDir the tests already inspect; the serializer is stateless and writes
         // atomically to <outputDir>/.freebird-resolved/<stem>.json.
         var markerSerializer = new ResolutionMarkerSerializer(logger);
-        var sut = new FileProcessor(decoder.Object, sniffer.Object, naming.Object, integrity.Object, writer.Object, metadata.Object, tagWriter.Object, markerSerializer, logger);
+        // v3.4 T12: FileProcessor now requires an IOutputPathMutexPool. Tests use the
+        // real OutputPathMutexPool (cheap, in-process) so the wiring is exercised end-to-end.
+        var mutexPool = new OutputPathMutexPool();
+        var sut = new FileProcessor(decoder.Object, sniffer.Object, naming.Object, integrity.Object, writer.Object, metadata.Object, tagWriter.Object, markerSerializer, mutexPool, logger);
         return (sut, decoder, sniffer, naming, integrity, writer, metadata, tagWriter);
     }
 
@@ -334,16 +338,18 @@ public class FileProcessorTests : IDisposable
         var t = new Mock<ITagWriter>().Object;
         var l = new Mock<ILogger>().Object;
         var ms = new ResolutionMarkerSerializer(l);
+        var mp = new OutputPathMutexPool();
 
-        ((Action)(() => _ = new FileProcessor(null!, s, n, i, w, m, t, ms, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, null!, n, i, w, m, t, ms, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, null!, i, w, m, t, ms, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, n, null!, w, m, t, ms, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, n, i, null!, m, t, ms, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, null!, t, ms, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, null!, ms, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, t, null!, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, t, ms, null!))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(null!, s, n, i, w, m, t, ms, mp, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, null!, n, i, w, m, t, ms, mp, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, null!, i, w, m, t, ms, mp, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, null!, w, m, t, ms, mp, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, null!, m, t, ms, mp, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, null!, t, ms, mp, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, null!, ms, mp, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, t, null!, mp, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, t, ms, null!, l))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, t, ms, mp, null!))).Should().Throw<ArgumentNullException>();
     }
 
     // --- INTEGRATION test: real fixtures + real decoder/sniffer/naming/writer, mocked composite ---
@@ -374,6 +380,7 @@ public class FileProcessorTests : IDisposable
             metadata.Object,
             new Mock<ITagWriter>().Object,
             new ResolutionMarkerSerializer(logger),
+            new OutputPathMutexPool(),
             logger);
 
         // v3.0.1: Offline=true mirrors the mocked Fallback("offline-mode") resolver

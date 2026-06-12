@@ -9,6 +9,7 @@ using FreeBird.Core.Decoding;
 using FreeBird.Core.Metadata;
 using FreeBird.Core.Models;
 using FreeBird.Core.Naming;
+using FreeBird.Core.Watch;
 using Serilog;
 
 namespace FreeBird.Core.Processing;
@@ -30,6 +31,7 @@ public sealed class FileProcessor : IFileProcessor
     private readonly IMetadataResolver _metadata;
     private readonly ITagWriter _tagWriter;
     private readonly ResolutionMarkerSerializer _markerSerializer;
+    private readonly IOutputPathMutexPool _outputMutexPool;
     private readonly ILogger _logger;
 
     public FileProcessor(
@@ -41,6 +43,7 @@ public sealed class FileProcessor : IFileProcessor
         IMetadataResolver metadata,
         ITagWriter tagWriter,
         ResolutionMarkerSerializer markerSerializer,
+        IOutputPathMutexPool outputMutexPool,
         ILogger logger)
     {
         _decoder = decoder ?? throw new ArgumentNullException(nameof(decoder));
@@ -51,6 +54,7 @@ public sealed class FileProcessor : IFileProcessor
         _metadata = metadata ?? throw new ArgumentNullException(nameof(metadata));
         _tagWriter = tagWriter ?? throw new ArgumentNullException(nameof(tagWriter));
         _markerSerializer = markerSerializer ?? throw new ArgumentNullException(nameof(markerSerializer));
+        _outputMutexPool = outputMutexPool ?? throw new ArgumentNullException(nameof(outputMutexPool));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -166,6 +170,21 @@ public sealed class FileProcessor : IFileProcessor
             // v3 T19a: per-run NamingTemplate is now threaded into the namer via the method param.
             var finalName = _naming.GetTargetName(sourcePath, format, song, options.NamingTemplate);
             var finalPath = Path.Combine(options.OutputDirectory, finalName);
+
+            // v3.4 T12: serialise the skip-check + atomic move + tag-write + marker-write
+            // critical section by finalPath. Two concurrent watches against different input
+            // dirs that produce the SAME output filename (e.g. same musicId in two cache dirs)
+            // would otherwise race here:
+            //   - both see File.Exists==false in Step 8,
+            //   - both File.Move to finalPath in Step 9 (clobber on Overwrite, throw on Skip),
+            //   - both metaflac on finalPath in Step 9.5 (tag corruption).
+            // Acquiring the per-path mutex BEFORE Step 8 makes the exists-check TOCTOU-safe
+            // and forces the second caller to serialise behind the first. The `using`
+            // declaration scopes the lock to the rest of the try-block — released on every
+            // exit (return, throw, fall-through).
+            using var outputMutexToken = await _outputMutexPool
+                .AcquireAsync(finalPath, cancellationToken)
+                .ConfigureAwait(false);
 
             // Step 8: collision check
             if (File.Exists(finalPath) && options.OnCollision == CollisionPolicy.Skip)
