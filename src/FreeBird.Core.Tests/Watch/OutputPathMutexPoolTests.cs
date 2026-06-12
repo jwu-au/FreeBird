@@ -139,6 +139,138 @@ public sealed class OutputPathMutexPoolTests
             "on Linux, case-variant paths are distinct files and so must be distinct keys");
     }
 
+    // --- T03b: deeper cross-OS canonicalization matrix --------------------------
+    // These tests exercise edge cases the T03 implementation already supports
+    // (drive-letter case-folding on Windows, dot-segment resolution, relative-
+    // path resolution, NFC/NFD intentional non-normalization on macOS, and
+    // case-sensitive Linux behaviour) but T03 itself only smoke-tested. They
+    // are pure additions — no production change accompanies them.
+
+    [SkippableFact]
+    public async Task Canonicalization_OnWindows_DriveLetterCase_TreatsAsSame()
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(),
+            "Drive letters are a Windows-only concept; NTFS is case-insensitive.");
+
+        using var pool = new OutputPathMutexPool();
+
+        // Path.GetFullPath preserves drive-letter case as written, but the
+        // Windows case-fold step in Canonicalize (ToUpperInvariant) collapses
+        // them onto a single key — so both acquires share the same entry and
+        // the second one must block on the same semaphore.
+        var firstToken = await pool.AcquireAsync(@"C:\temp\x", CancellationToken.None);
+        pool.EntryCount.Should().Be(1);
+
+        using var ctsBlock = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+        var act = async () => await pool.AcquireAsync(@"c:\temp\x", ctsBlock.Token);
+        await act.Should().ThrowAsync<OperationCanceledException>(
+            "drive-letter case-variant must canonicalize to the same key and therefore block");
+
+        pool.EntryCount.Should().Be(1,
+            "case-variant drive letters should collapse to one entry on Windows");
+
+        firstToken.Dispose();
+    }
+
+    [SkippableFact]
+    public async Task Canonicalization_OnMac_NFC_vs_NFD_TreatsAsDistinct()
+    {
+        Skip.IfNot(OperatingSystem.IsMacOS(),
+            "APFS (default since macOS 10.13) stores filenames as-written without "
+            + "Unicode normalization; HFS+ used to normalize to NFD but is now legacy.");
+
+        using var pool = new OutputPathMutexPool();
+
+        // NFC form: precomposed 'é' = U+00E9.
+        var nfc = "/tmp/fb-unicode-\u00e9";
+        // NFD form: 'e' (U+0065) + combining acute (U+0301), rendered identically.
+        var nfd = "/tmp/fb-unicode-e\u0301";
+
+        using var t1 = await pool.AcquireAsync(nfc, CancellationToken.None);
+        using var t2 = await pool.AcquireAsync(nfd, CancellationToken.None);
+
+        // Our Canonicalize does NOT NFC/NFD-fold deliberately: APFS treats these
+        // as distinct directory entries (`ls` would show two files), so collapsing
+        // them in the mutex pool would falsely serialize writes to *different*
+        // files. HFS+ would have collapsed them to NFD at the filesystem layer,
+        // but HFS+ is no longer the macOS default and we follow APFS semantics.
+        pool.EntryCount.Should().Be(2,
+            "APFS treats NFC and NFD as distinct files; the pool must not collapse them");
+    }
+
+    [SkippableFact]
+    public async Task Canonicalization_OnLinux_TrailingSlashTrimmed_StillCollapses()
+    {
+        Skip.IfNot(OperatingSystem.IsLinux(),
+            "Asserts both trailing-slash trim AND case-sensitivity on a single OS.");
+
+        using var pool = new OutputPathMutexPool();
+
+        // (a) trailing-slash trim is OS-independent (driven by Path.GetFullPath
+        //     plus our trim) — verify it on Linux explicitly.
+        using var t1 = await pool.AcquireAsync("/tmp/fb-linux-canon", CancellationToken.None);
+        pool.EntryCount.Should().Be(1);
+
+        using var ctsBlock = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+        var act = async () => await pool.AcquireAsync("/tmp/fb-linux-canon/", ctsBlock.Token);
+        await act.Should().ThrowAsync<OperationCanceledException>(
+            "trailing-slash variant should canonicalize to the same key on Linux too");
+
+        pool.EntryCount.Should().Be(1);
+
+        // (b) but case differences MUST remain distinct keys on Linux.
+        using var t2 = await pool.AcquireAsync("/tmp/fb-LINUX-canon/", CancellationToken.None);
+        pool.EntryCount.Should().Be(2,
+            "case-variant paths are distinct files on Linux even after trailing-slash trim");
+    }
+
+    [Fact]
+    public async Task Canonicalization_RelativePath_ResolvedAgainstCwd()
+    {
+        using var pool = new OutputPathMutexPool();
+
+        // Path.GetFullPath resolves a relative path against the current working
+        // directory, so "./fb-rel-test" and "<cwd>/fb-rel-test" must map to the
+        // same canonical key.
+        var relative = Path.Combine(".", "fb-rel-test");
+        var absolute = Path.Combine(Directory.GetCurrentDirectory(), "fb-rel-test");
+
+        using var t1 = await pool.AcquireAsync(relative, CancellationToken.None);
+        pool.EntryCount.Should().Be(1);
+
+        using var ctsBlock = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+        var act = async () => await pool.AcquireAsync(absolute, ctsBlock.Token);
+        await act.Should().ThrowAsync<OperationCanceledException>(
+            "relative path should resolve to the same absolute key as the equivalent absolute form");
+
+        pool.EntryCount.Should().Be(1,
+            "relative and absolute spellings of the same file must share one entry");
+    }
+
+    [Fact]
+    public async Task Canonicalization_DotDotComponents_Resolved()
+    {
+        using var pool = new OutputPathMutexPool();
+
+        // Path.GetFullPath collapses ".." components, so these two spellings
+        // refer to the same file and must share a single pool entry. Use a
+        // path rooted at the current directory so the test works on every OS
+        // (Windows doesn't have "/tmp", macOS may /private-prefix it, etc.).
+        var root = Directory.GetCurrentDirectory();
+        var withDotDot = Path.Combine(root, "a", "..", "fb-dotdot-test");
+        var direct = Path.Combine(root, "fb-dotdot-test");
+
+        using var t1 = await pool.AcquireAsync(withDotDot, CancellationToken.None);
+        pool.EntryCount.Should().Be(1);
+
+        using var ctsBlock = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+        var act = async () => await pool.AcquireAsync(direct, ctsBlock.Token);
+        await act.Should().ThrowAsync<OperationCanceledException>(
+            "Path.GetFullPath resolves '..' segments, so both spellings must map to the same key");
+
+        pool.EntryCount.Should().Be(1);
+    }
+
     [Fact]
     public async Task Acquire_HonorsCancellation_BeforeSemaphoreWait()
     {
