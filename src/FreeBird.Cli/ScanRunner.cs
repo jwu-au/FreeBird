@@ -86,7 +86,7 @@ public static class ScanRunner
             if (RunnerOverride is not null)
             {
                 var capturedOptions = new ScanOptions(
-                    Path.GetFullPath(inputDir),
+                    new[] { Path.GetFullPath(inputDir) },
                     Path.GetFullPath(outputDir),
                     integrity,
                     Math.Max(1, concurrency),
@@ -136,7 +136,7 @@ public static class ScanRunner
 
             var orchestrator = scope.Resolve<IScanOrchestrator>();
             var options = new ScanOptions(
-                Path.GetFullPath(inputDir),
+                new[] { Path.GetFullPath(inputDir) },
                 Path.GetFullPath(outputDir),
                 integrity,
                 Math.Max(1, concurrency),

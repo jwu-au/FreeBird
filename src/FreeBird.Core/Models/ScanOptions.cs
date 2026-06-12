@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using FreeBird.Core.Abstractions;
 
 namespace FreeBird.Core.Models;
@@ -5,8 +6,15 @@ namespace FreeBird.Core.Models;
 /// <summary>
 /// Configuration for a scan run, derived from CLI flags.
 /// </summary>
+/// <remarks>
+/// v3.4 T13: <see cref="InputDirectories"/> replaces the prior single
+/// <c>InputDirectory</c> string. <c>fb scan</c> processes ALL listed directories
+/// and uses fail-fast semantics — if any input directory is missing, the run
+/// aborts before any work is done (contrast with <c>fb watch</c>, which uses
+/// born-DEAD per-task semantics). See design-spec §2.5.
+/// </remarks>
 public sealed record ScanOptions(
-    string InputDirectory,
+    IReadOnlyList<string> InputDirectories,
     string OutputDirectory,
     IntegrityLevel Integrity = IntegrityLevel.Auto,
     int Concurrency = 2,

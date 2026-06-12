@@ -29,18 +29,27 @@ public sealed class ScanOrchestrator : IScanOrchestrator
     public async Task<ScanSummary> RunAsync(ScanOptions options, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(options.InputDirectories);
 
-        if (!Directory.Exists(options.InputDirectory))
+        // v3.4 T13: FAIL-FAST — validate every input directory exists BEFORE
+        // starting any work. Differs from `fb watch` born-DEAD semantics by design
+        // (see design-spec §2.5).
+        foreach (var inputDir in options.InputDirectories)
         {
-            throw new DirectoryNotFoundException($"Input directory not found: {options.InputDirectory}");
+            if (!Directory.Exists(inputDir))
+            {
+                throw new DirectoryNotFoundException($"Input directory not found: {inputDir}");
+            }
         }
 
         var sw = Stopwatch.StartNew();
-        _logger.Information("Scan starting. Input={Input}, Output={Output}, Integrity={Level}, Concurrency={Concurrency}",
-            options.InputDirectory, options.OutputDirectory, options.Integrity, options.Concurrency);
+        _logger.Information("Scan starting. Inputs={Count}, Output={Output}, Integrity={Level}, Concurrency={Concurrency}",
+            options.InputDirectories.Count, options.OutputDirectory, options.Integrity, options.Concurrency);
 
-        var files = EnumerateSources(options.InputDirectory).ToArray();
-        _logger.Information("Found {Count} candidate file(s) to process", files.Length);
+        // Enumerate ALL input dirs into a single flat list; the parallel loop
+        // below then dispatches across the union.
+        var files = options.InputDirectories.SelectMany(EnumerateSources).ToArray();
+        _logger.Information("Found {Count} candidate file(s) across {Inputs} input dir(s)", files.Length, options.InputDirectories.Count);
 
         // Counters (thread-safe)
         int ok = 0, skipped = 0, unknown = 0, integrityFailed = 0, errors = 0;

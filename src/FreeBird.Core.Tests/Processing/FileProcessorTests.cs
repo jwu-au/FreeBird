@@ -110,7 +110,7 @@ public class FileProcessorTests : IDisposable
     }
 
     private ScanOptions DefaultOptions(IntegrityLevel level = IntegrityLevel.Auto, CollisionPolicy collision = CollisionPolicy.Skip)
-        => new(_inputDir, _outputDir, level, 1, collision);
+        => new(new[] { _inputDir }, _outputDir, level, 1, collision);
 
     // --- Path 1: OK happy path ---
 
@@ -862,7 +862,7 @@ public class FileProcessorTests : IDisposable
               .Returns("AL-T.flac");
 
         const string PerRunTemplate = "{album}|{title}";
-        var opts = new ScanOptions(_inputDir, _outputDir) { NamingTemplate = PerRunTemplate };
+        var opts = new ScanOptions(new[] { _inputDir }, _outputDir) { NamingTemplate = PerRunTemplate };
 
         var result = await sut.ProcessAsync(ucPath, opts);
 
@@ -921,7 +921,7 @@ public class FileProcessorTests : IDisposable
         naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
               .Returns("My Artist - My Title.flac");
 
-        var opts = new ScanOptions(_inputDir, _outputDir) { WriteTags = true };
+        var opts = new ScanOptions(new[] { _inputDir }, _outputDir) { WriteTags = true };
         var result = await sut.ProcessAsync(ucPath, opts);
 
         result.Outcome.Should().Be(ScanOutcome.Ok);
@@ -951,7 +951,7 @@ public class FileProcessorTests : IDisposable
         naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null, It.IsAny<string?>()))
               .Returns("42.flac");
 
-        var opts = new ScanOptions(_inputDir, _outputDir) { WriteTags = true };
+        var opts = new ScanOptions(new[] { _inputDir }, _outputDir) { WriteTags = true };
         var result = await sut.ProcessAsync(ucPath, opts);
 
         result.Outcome.Should().Be(ScanOutcome.Ok);
@@ -984,7 +984,7 @@ public class FileProcessorTests : IDisposable
         tagWriter.Setup(t => t.WriteAsync(It.IsAny<string>(), It.IsAny<AudioFormat>(), It.IsAny<SongInfo>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(new TagWriteResult.Failed("tag-tool-missing"));
 
-        var opts = new ScanOptions(_inputDir, _outputDir) { WriteTags = true };
+        var opts = new ScanOptions(new[] { _inputDir }, _outputDir) { WriteTags = true };
         var result = await sut.ProcessAsync(ucPath, opts);
 
         result.Outcome.Should().Be(ScanOutcome.Ok);
@@ -1018,7 +1018,7 @@ public class FileProcessorTests : IDisposable
         tagWriter.Setup(t => t.WriteAsync(It.IsAny<string>(), It.IsAny<AudioFormat>(), It.IsAny<SongInfo>(), It.IsAny<CancellationToken>()))
                  .ThrowsAsync(new InvalidOperationException("tagger lib panicked"));
 
-        var opts = new ScanOptions(_inputDir, _outputDir) { WriteTags = true };
+        var opts = new ScanOptions(new[] { _inputDir }, _outputDir) { WriteTags = true };
         var result = await sut.ProcessAsync(ucPath, opts);
 
         result.Outcome.Should().Be(ScanOutcome.Ok);
@@ -1054,7 +1054,7 @@ public class FileProcessorTests : IDisposable
         tagWriter.Setup(t => t.WriteAsync(It.IsAny<string>(), It.IsAny<AudioFormat>(), It.IsAny<SongInfo>(), It.IsAny<CancellationToken>()))
                  .ThrowsAsync(new FlacNotAvailableException("metaflac not on PATH"));
 
-        var opts = new ScanOptions(_inputDir, _outputDir) { WriteTags = true };
+        var opts = new ScanOptions(new[] { _inputDir }, _outputDir) { WriteTags = true };
         var result = await sut.ProcessAsync(ucPath, opts);
 
         result.Outcome.Should().Be(ScanOutcome.Ok);
@@ -1363,7 +1363,7 @@ public class FileProcessorTests : IDisposable
               .Returns("A - T.flac");
         // tagWriter default already returns TagWriteResult.Success.Instance.
 
-        var opts = new ScanOptions(_inputDir, _outputDir) { WriteTags = true };
+        var opts = new ScanOptions(new[] { _inputDir }, _outputDir) { WriteTags = true };
         var result = await sut.ProcessAsync(ucPath, opts);
 
         result.Outcome.Should().Be(ScanOutcome.Ok);

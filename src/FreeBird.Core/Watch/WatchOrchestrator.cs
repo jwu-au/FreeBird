@@ -384,7 +384,7 @@ public sealed class WatchOrchestrator : IWatchOrchestrator
     /// Map watch options onto the v1 scan options used by IScanOrchestrator and IFileProcessor.
     /// </summary>
     private static ScanOptions ToScanOptions(WatchOptions w) => new(
-        InputDirectory: w.InputDirs[0],
+        InputDirectories: new[] { w.InputDirs[0] },
         OutputDirectory: w.OutputDir,
         Integrity: w.Integrity,
         Concurrency: w.Concurrency,

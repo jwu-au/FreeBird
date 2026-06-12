@@ -49,7 +49,7 @@ public class ModelTests
     [Fact]
     public void ScanOptions_DefaultsAreSpecCompliant()
     {
-        var opts = new ScanOptions("in", "out");
+        var opts = new ScanOptions(new[] { "in" }, "out");
         opts.Integrity.Should().Be(IntegrityLevel.Auto);
         opts.Concurrency.Should().Be(2);
         opts.OnCollision.Should().Be(CollisionPolicy.Skip);

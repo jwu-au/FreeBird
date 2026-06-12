@@ -8,9 +8,9 @@ public class ScanOptionsTests
     [Fact]
     public void Defaults_ExistingFields_MatchSpec()
     {
-        var opts = new ScanOptions("in", "out");
+        var opts = new ScanOptions(new[] { "in" }, "out");
 
-        opts.InputDirectory.Should().Be("in");
+        opts.InputDirectories.Should().ContainSingle().Which.Should().Be("in");
         opts.OutputDirectory.Should().Be("out");
         opts.Integrity.Should().Be(IntegrityLevel.Auto);
         opts.Concurrency.Should().Be(2);
@@ -18,9 +18,19 @@ public class ScanOptionsTests
     }
 
     [Fact]
+    public void InputDirectories_AcceptsMultipleEntries()
+    {
+        // v3.4 T13: ScanOptions now supports a list of input directories.
+        var opts = new ScanOptions(new[] { "in1", "in2", "in3" }, "out");
+
+        opts.InputDirectories.Should().BeEquivalentTo(new[] { "in1", "in2", "in3" });
+        opts.InputDirectories.Count.Should().Be(3);
+    }
+
+    [Fact]
     public void Defaults_FiveMetadataFields_MatchSpec()
     {
-        var opts = new ScanOptions("in", "out");
+        var opts = new ScanOptions(new[] { "in" }, "out");
 
         opts.NamingTemplate.Should().Be("{artist} - {title}");
         opts.Offline.Should().BeFalse();
@@ -32,7 +42,7 @@ public class ScanOptionsTests
     [Fact]
     public void WithBlocks_OverrideMetadataFields()
     {
-        var a = new ScanOptions("in", "out");
+        var a = new ScanOptions(new[] { "in" }, "out");
         var b = a with
         {
             NamingTemplate = "{musicId}",

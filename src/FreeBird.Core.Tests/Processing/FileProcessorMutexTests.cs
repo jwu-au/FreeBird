@@ -93,7 +93,7 @@ public sealed class FileProcessorMutexTests : IDisposable
         integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
                  .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
 
-        var opts = new ScanOptions(_inputDirA, _outputDir, IntegrityLevel.Auto, 1, CollisionPolicy.Overwrite)
+        var opts = new ScanOptions(new[] { _inputDirA }, _outputDir, IntegrityLevel.Auto, 1, CollisionPolicy.Overwrite)
             with { Offline = true };
 
         var result = await sut.ProcessAsync(ucPath, opts);
@@ -132,7 +132,7 @@ public sealed class FileProcessorMutexTests : IDisposable
         // Pre-create finalPath as a DIRECTORY so File.Move throws.
         Directory.CreateDirectory(Path.Combine(_outputDir, "999-collide.mp3"));
 
-        var opts = new ScanOptions(_inputDirA, _outputDir, IntegrityLevel.Auto, 1, CollisionPolicy.Overwrite)
+        var opts = new ScanOptions(new[] { _inputDirA }, _outputDir, IntegrityLevel.Auto, 1, CollisionPolicy.Overwrite)
             with { Offline = true };
 
         var result = await sut.ProcessAsync(ucPath, opts);
@@ -170,9 +170,9 @@ public sealed class FileProcessorMutexTests : IDisposable
         var (sutA, _, _, _) = BuildSutWithRealPool(pool);
         var (sutB, _, _, _) = BuildSutWithRealPool(pool);
 
-        var optsA = new ScanOptions(_inputDirA, _outputDir, IntegrityLevel.Auto, 1, CollisionPolicy.Overwrite)
+        var optsA = new ScanOptions(new[] { _inputDirA }, _outputDir, IntegrityLevel.Auto, 1, CollisionPolicy.Overwrite)
             with { Offline = true };
-        var optsB = new ScanOptions(_inputDirB, _outputDir, IntegrityLevel.Auto, 1, CollisionPolicy.Overwrite)
+        var optsB = new ScanOptions(new[] { _inputDirB }, _outputDir, IntegrityLevel.Auto, 1, CollisionPolicy.Overwrite)
             with { Offline = true };
 
         // Fire both in parallel.

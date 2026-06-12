@@ -37,7 +37,7 @@ public class ScanOrchestratorTests : IDisposable
     }
 
     private ScanOptions DefaultOptions(int concurrency = 2) =>
-        new(_inputDir, _outputDir, IntegrityLevel.Auto, concurrency, CollisionPolicy.Skip);
+        new(new[] { _inputDir }, _outputDir, IntegrityLevel.Auto, concurrency, CollisionPolicy.Skip);
 
     private async Task<string> TouchAsync(string name)
     {
@@ -234,7 +234,7 @@ public class ScanOrchestratorTests : IDisposable
     public async Task RunAsync_NonexistentInputDir_Throws()
     {
         var sut = new ScanOrchestrator(new Mock<IFileProcessor>().Object, _testLogger);
-        var bad = new ScanOptions("/nonexistent/dir/xyz", _outputDir, IntegrityLevel.Auto, 1, CollisionPolicy.Skip);
+        var bad = new ScanOptions(new[] { "/nonexistent/dir/xyz" }, _outputDir, IntegrityLevel.Auto, 1, CollisionPolicy.Skip);
         Func<Task> act = () => sut.RunAsync(bad);
         await act.Should().ThrowAsync<DirectoryNotFoundException>();
     }
@@ -251,5 +251,128 @@ public class ScanOrchestratorTests : IDisposable
     {
         Action act = () => _ = new ScanOrchestrator(new Mock<IFileProcessor>().Object, null!);
         act.Should().Throw<ArgumentNullException>();
+    }
+
+    // --- v3.4 T13: multi-input semantics ---
+
+    [Fact]
+    public async Task RunAsync_MultipleInputDirs_ProcessesAll()
+    {
+        // Two input dirs, each with one .uc file. The orchestrator must enumerate
+        // BOTH and dispatch processing for each file.
+        var inputA = Path.Combine(_tempDir, "in-a");
+        var inputB = Path.Combine(_tempDir, "in-b");
+        Directory.CreateDirectory(inputA);
+        Directory.CreateDirectory(inputB);
+        var fileA = Path.Combine(inputA, "a.uc");
+        var fileB = Path.Combine(inputB, "b.uc!");
+        await File.WriteAllBytesAsync(fileA, new byte[] { 0xEA });
+        await File.WriteAllBytesAsync(fileB, new byte[] { 0xEA });
+
+        var proc = new Mock<IFileProcessor>();
+        proc.Setup(p => p.ProcessAsync(It.IsAny<string>(), It.IsAny<ScanOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string path, ScanOptions _, CancellationToken _) =>
+                new ScanResult(path, ScanOutcome.Ok, AudioFormat.Mp3));
+
+        var opts = new ScanOptions(new[] { inputA, inputB }, _outputDir, IntegrityLevel.Auto, 1, CollisionPolicy.Skip);
+        var sut = new ScanOrchestrator(proc.Object, _testLogger);
+        var summary = await sut.RunAsync(opts);
+
+        summary.Processed.Should().Be(2);
+        summary.Ok.Should().Be(2);
+        proc.Verify(p => p.ProcessAsync(fileA, It.IsAny<ScanOptions>(), It.IsAny<CancellationToken>()), Times.Once);
+        proc.Verify(p => p.ProcessAsync(fileB, It.IsAny<ScanOptions>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunAsync_OneInputDirMissing_ThrowsDirectoryNotFound_BeforeAnyProcessing()
+    {
+        // Fail-fast: the first missing directory aborts the run BEFORE any files
+        // are dispatched. Mock is strict so any ProcessAsync call would throw.
+        await TouchAsync("present.uc"); // file in _inputDir (which exists)
+
+        var proc = new Mock<IFileProcessor>(MockBehavior.Strict);
+        var opts = new ScanOptions(
+            new[] { _inputDir, "/nonexistent/dir/zzz" },
+            _outputDir,
+            IntegrityLevel.Auto, 1, CollisionPolicy.Skip);
+
+        var sut = new ScanOrchestrator(proc.Object, _testLogger);
+        Func<Task> act = () => sut.RunAsync(opts);
+
+        await act.Should().ThrowAsync<DirectoryNotFoundException>()
+                 .WithMessage("*nonexistent/dir/zzz*");
+        // Strict mock proves no ProcessAsync was invoked.
+        proc.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task RunAsync_EmptyInputDirsList_ReturnsZeroSummary()
+    {
+        var proc = new Mock<IFileProcessor>(MockBehavior.Strict);
+        var opts = new ScanOptions(Array.Empty<string>(), _outputDir, IntegrityLevel.Auto, 1, CollisionPolicy.Skip);
+
+        var sut = new ScanOrchestrator(proc.Object, _testLogger);
+        var summary = await sut.RunAsync(opts);
+
+        summary.Processed.Should().Be(0);
+        summary.Ok.Should().Be(0);
+        summary.HasFailures.Should().BeFalse();
+        proc.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task RunAsync_AllInputDirsMissing_ThrowsOnFirstMissing()
+    {
+        var proc = new Mock<IFileProcessor>(MockBehavior.Strict);
+        var opts = new ScanOptions(
+            new[] { "/nope/a", "/nope/b" },
+            _outputDir,
+            IntegrityLevel.Auto, 1, CollisionPolicy.Skip);
+
+        var sut = new ScanOrchestrator(proc.Object, _testLogger);
+        Func<Task> act = () => sut.RunAsync(opts);
+
+        // Fail-fast on the first missing dir, not the last.
+        await act.Should().ThrowAsync<DirectoryNotFoundException>()
+                 .WithMessage("*/nope/a*");
+    }
+
+    [Fact]
+    public async Task RunAsync_FilesAcrossMultipleInputs_AggregatedIntoOneSummary()
+    {
+        // Two input dirs each contribute files of different outcomes. Summary
+        // counters must aggregate the union (not be per-dir).
+        var inputA = Path.Combine(_tempDir, "in-agg-a");
+        var inputB = Path.Combine(_tempDir, "in-agg-b");
+        Directory.CreateDirectory(inputA);
+        Directory.CreateDirectory(inputB);
+        var aOk = Path.Combine(inputA, "1.uc");
+        var aSk = Path.Combine(inputA, "2.uc");
+        var bOk = Path.Combine(inputB, "3.uc");
+        var bEr = Path.Combine(inputB, "4.uc");
+        foreach (var f in new[] { aOk, aSk, bOk, bEr })
+        {
+            await File.WriteAllBytesAsync(f, new byte[] { 0xEA });
+        }
+
+        var proc = new Mock<IFileProcessor>();
+        proc.Setup(p => p.ProcessAsync(aOk, It.IsAny<ScanOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ScanResult(aOk, ScanOutcome.Ok, AudioFormat.Mp3));
+        proc.Setup(p => p.ProcessAsync(aSk, It.IsAny<ScanOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ScanResult(aSk, ScanOutcome.Skipped, AudioFormat.Mp3));
+        proc.Setup(p => p.ProcessAsync(bOk, It.IsAny<ScanOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ScanResult(bOk, ScanOutcome.Ok, AudioFormat.Mp3));
+        proc.Setup(p => p.ProcessAsync(bEr, It.IsAny<ScanOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ScanResult(bEr, ScanOutcome.Error, AudioFormat.Mp3));
+
+        var opts = new ScanOptions(new[] { inputA, inputB }, _outputDir, IntegrityLevel.Auto, 1, CollisionPolicy.Skip);
+        var sut = new ScanOrchestrator(proc.Object, _testLogger);
+        var summary = await sut.RunAsync(opts);
+
+        summary.Processed.Should().Be(4);
+        summary.Ok.Should().Be(2);
+        summary.Skipped.Should().Be(1);
+        summary.Errors.Should().Be(1);
     }
 }

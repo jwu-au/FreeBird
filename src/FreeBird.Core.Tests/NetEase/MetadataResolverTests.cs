@@ -50,7 +50,7 @@ public class MetadataResolverTests
     {
         var apiMock = new Mock<INetEaseApiClient>(MockBehavior.Strict);
         var (resolver, _) = ResolverWith(apiMock.Object);
-        var opts = new ScanOptions("in", "out") with { Offline = true };
+        var opts = new ScanOptions(new[] { "in" }, "out") with { Offline = true };
 
         var result = await resolver.ResolveAsync(SamplePath, opts, CancellationToken.None);
 
@@ -69,7 +69,7 @@ public class MetadataResolverTests
         apiMock.Setup(x => x.GetSongDetailAsync(3367798042L, It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
                .ReturnsAsync(new NetEaseApiResult.Success(song));
         var (resolver, _) = ResolverWith(apiMock.Object);
-        var opts = new ScanOptions("in", "out");
+        var opts = new ScanOptions(new[] { "in" }, "out");
 
         var result = await resolver.ResolveAsync(SamplePath, opts, CancellationToken.None);
 
@@ -84,7 +84,7 @@ public class MetadataResolverTests
         apiMock.Setup(x => x.GetSongDetailAsync(It.IsAny<long>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
                .ReturnsAsync(new NetEaseApiResult.NotFound(3367798042L));
         var (resolver, _) = ResolverWith(apiMock.Object);
-        var opts = new ScanOptions("in", "out");
+        var opts = new ScanOptions(new[] { "in" }, "out");
 
         var result = await resolver.ResolveAsync(SamplePath, opts, CancellationToken.None);
 
@@ -99,7 +99,7 @@ public class MetadataResolverTests
         apiMock.Setup(x => x.GetSongDetailAsync(It.IsAny<long>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
                .ReturnsAsync(new NetEaseApiResult.Timeout(TimeSpan.FromSeconds(10)));
         var (resolver, _) = ResolverWith(apiMock.Object);
-        var opts = new ScanOptions("in", "out");
+        var opts = new ScanOptions(new[] { "in" }, "out");
 
         var result = await resolver.ResolveAsync(SamplePath, opts, CancellationToken.None);
 
@@ -114,7 +114,7 @@ public class MetadataResolverTests
         apiMock.Setup(x => x.GetSongDetailAsync(It.IsAny<long>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
                .ReturnsAsync(new NetEaseApiResult.NetworkError("connection refused"));
         var (resolver, sink) = ResolverWith(apiMock.Object);
-        var opts = new ScanOptions("in", "out");
+        var opts = new ScanOptions(new[] { "in" }, "out");
 
         var result = await resolver.ResolveAsync(SamplePath, opts, CancellationToken.None);
 
@@ -130,7 +130,7 @@ public class MetadataResolverTests
         apiMock.Setup(x => x.GetSongDetailAsync(It.IsAny<long>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
                .ReturnsAsync(new NetEaseApiResult.DeserializationError("missing songs field"));
         var (resolver, sink) = ResolverWith(apiMock.Object);
-        var opts = new ScanOptions("in", "out");
+        var opts = new ScanOptions(new[] { "in" }, "out");
 
         var result = await resolver.ResolveAsync(SamplePath, opts, CancellationToken.None);
 
@@ -148,7 +148,7 @@ public class MetadataResolverTests
     {
         var apiMock = new Mock<INetEaseApiClient>(MockBehavior.Strict);
         var (resolver, sink) = ResolverWith(apiMock.Object);
-        var opts = new ScanOptions("in", "out"); // online
+        var opts = new ScanOptions(new[] { "in" }, "out"); // online
 
         var result = await resolver.ResolveAsync("/tmp/not-a-musicid.uc", opts, CancellationToken.None);
 
@@ -177,7 +177,7 @@ public class MetadataResolverTests
             .Setup(c => c.GetSongDetailAsync(3367798042L, It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new NetEaseApiResult.Success(song));
         var (resolver, _) = ResolverWith(apiMock.Object);
-        var opts = new ScanOptions("in", "out"); // online
+        var opts = new ScanOptions(new[] { "in" }, "out"); // online
 
         var path = "/cache/3367798042-_-_5999-_-_a38658b6e504b7520bb4c507db13b9d2.uc!";
         var result = await resolver.ResolveAsync(path, opts, CancellationToken.None);
@@ -195,7 +195,7 @@ public class MetadataResolverTests
         // MockBehavior.Strict ensures the API is NOT called for unparseable stems.
         var apiMock = new Mock<INetEaseApiClient>(MockBehavior.Strict);
         var (resolver, _) = ResolverWith(apiMock.Object);
-        var opts = new ScanOptions("in", "out"); // online
+        var opts = new ScanOptions(new[] { "in" }, "out"); // online
 
         var path = "/cache/nodigits.uc";
         var result = await resolver.ResolveAsync(path, opts, CancellationToken.None);

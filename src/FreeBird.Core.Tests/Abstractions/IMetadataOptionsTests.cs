@@ -9,7 +9,7 @@ public class IMetadataOptionsTests
     [Fact]
     public void ScanOptions_ImplementsIMetadataOptions()
     {
-        var opts = new ScanOptions("in", "out");
+        var opts = new ScanOptions(new[] { "in" }, "out");
 
         var asMetadata = opts as IMetadataOptions;
 
