@@ -80,7 +80,10 @@ public sealed class OutputPathMutexPool : IOutputPathMutexPool, IDependency, IDi
 
     public async ValueTask<IDisposable> AcquireAsync(string path, CancellationToken ct)
     {
-        ArgumentNullException.ThrowIfNull(path);
+        // I-2: reject both null and empty at the boundary. An empty path would
+        // otherwise canonicalize to whatever the current working directory is,
+        // silently serialising unrelated callers on the same pool entry.
+        ArgumentException.ThrowIfNullOrEmpty(path);
 
         // Fast-fail before incrementing refcount so a pre-cancelled token doesn't
         // create-then-evict a transient entry.
@@ -165,6 +168,16 @@ public sealed class OutputPathMutexPool : IOutputPathMutexPool, IDependency, IDi
     /// </summary>
     private void ReleaseRefcount(string key, Entry entry, bool releaseSemaphore)
     {
+        // I-1 safety: if the pool has been disposed (which already disposed every
+        // entry semaphore and cleared the dictionary), a late token release would
+        // throw ObjectDisposedException on entry.Sem.Release() and corrupt no-longer-
+        // tracked refcount state. No-op instead so try/using/await-using teardown
+        // patterns are order-independent.
+        if (Volatile.Read(ref _disposed) == 1)
+        {
+            return;
+        }
+
         if (releaseSemaphore)
         {
             entry.Sem.Release();

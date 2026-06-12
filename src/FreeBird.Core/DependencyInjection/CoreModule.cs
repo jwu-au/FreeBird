@@ -62,6 +62,28 @@ public sealed class CoreModule : Module
                .As<FreeBird.Core.Abstractions.ICompletionDetector>()
                .SingleInstance();
 
+        // v3.4 T03c — Limiter primitives MUST be process-wide singletons.
+        // The IDependency auto-scan above registers them as InstancePerLifetimeScope,
+        // which would silently break their contracts (each lifetime scope would get
+        // its own concurrency cap, its own token bucket, its own per-path mutex pool).
+        // Last-registration-wins overrides the bulk scan for these three services.
+        //
+        //   - GlobalApiRateLimiter (T01): caps in-flight API calls across the process.
+        //   - TokenBucketRateLimiter (existing): paces API requests across the process.
+        //   - OutputPathMutexPool (T03): serialises writes to the same output path
+        //     across the process, regardless of which WatchTask owns the write.
+        builder.RegisterType<FreeBird.Core.Watch.GlobalApiRateLimiter>()
+               .As<FreeBird.Core.Watch.IGlobalApiRateLimiter>()
+               .SingleInstance();
+
+        builder.RegisterType<FreeBird.Core.Watch.TokenBucketRateLimiter>()
+               .As<FreeBird.Core.Watch.ITokenBucketRateLimiter>()
+               .SingleInstance();
+
+        builder.RegisterType<FreeBird.Core.Watch.OutputPathMutexPool>()
+               .As<FreeBird.Core.Watch.IOutputPathMutexPool>()
+               .SingleInstance();
+
         // NamingTemplateRenderer is pure / stateless. SingleInstance is a small
         // allocation optimization — no per-scope copies of an immutable function object.
         // Last-registration-wins overrides the bulk InstancePerLifetimeScope above.

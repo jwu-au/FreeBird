@@ -368,4 +368,40 @@ public sealed class OutputPathMutexPoolTests
         using var t2 = await pool.AcquireAsync(path, CancellationToken.None);
         pool.EntryCount.Should().Be(1);
     }
+    [Fact]
+    public async Task Token_DisposeAfterPoolDispose_DoesNotThrow()
+    {
+        // I-1 regression: previously, Pool.Dispose() disposed all entry semaphores,
+        // then Token.Dispose() called entry.Sem.Release() on a disposed semaphore
+        // and threw ObjectDisposedException. The pool-disposal path now no-ops the
+        // token release so try/using/await-using patterns in test teardown are safe
+        // regardless of disposal order.
+        var pool = new OutputPathMutexPool();
+        var token = await pool.AcquireAsync("/tmp/fb-pool-dispose-first", CancellationToken.None);
+
+        pool.Dispose();
+
+        var act = () => token.Dispose();
+        act.Should().NotThrow(
+            "Token.Dispose() after Pool.Dispose() must be a safe no-op, not throw ObjectDisposedException");
+    }
+
+    [Fact]
+    public async Task Acquire_EmptyString_ThrowsArgumentException()
+    {
+        // I-2: empty string is no more a valid output path than null is. Catch it
+        // at the boundary with a clear ArgumentException rather than producing a
+        // canonicalized "" key that quietly serialises unrelated callers.
+        using var pool = new OutputPathMutexPool();
+
+        var act = async () => await pool.AcquireAsync(string.Empty, CancellationToken.None);
+
+        // Must surface from the explicit boundary check with paramName="path",
+        // not from a downstream Path.GetFullPath("") with paramName="path" /
+        // message "Value cannot be null." that masks the real input problem.
+        var ex = await act.Should().ThrowAsync<ArgumentException>();
+        ex.And.ParamName.Should().Be("path",
+            "the boundary guard must name the offending parameter so callers can fix their input");
+    }
 }
+
