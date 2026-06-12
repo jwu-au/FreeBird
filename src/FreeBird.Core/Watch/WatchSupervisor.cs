@@ -2,6 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
+using FreeBird.Core.Models;
 using Serilog;
 
 namespace FreeBird.Core.Watch;
@@ -118,4 +121,111 @@ public sealed class WatchSupervisor
         RuntimeInformation.IsOSPlatform(OSPlatform.Windows) || RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
             ? StringComparer.OrdinalIgnoreCase
             : StringComparer.Ordinal;
+
+    /// <summary>
+    /// Run all <paramref name="tasks"/> concurrently until they complete naturally or
+    /// <paramref name="externalCt"/> is cancelled. Drains gracefully on cancellation:
+    /// every task receives <see cref="WatchTask.Cancel"/>, all are awaited via
+    /// <see cref="Task.WhenAll(System.Threading.Tasks.Task[])"/> (no <c>WhenAny</c> race),
+    /// and per-task <see cref="ScanSummary"/> results are summed into a single aggregate.
+    ///
+    /// Failure isolation: an exception escaping a single task's <c>RunAsync</c> is logged at
+    /// WARN and the task contributes an empty summary; sibling tasks continue and are awaited.
+    /// Born-DEAD tasks already short-circuit to an empty summary inside <see cref="WatchTask.RunAsync"/>.
+    ///
+    /// Per-task <see cref="WatchOptions"/>: <paramref name="optionsTemplate"/> is cloned per task
+    /// with <c>InputDirs</c> overridden to <c>[ task.Input.Path ]</c>. All other knobs (output dir,
+    /// concurrency, integrity, etc.) are inherited from the template.
+    ///
+    /// Scope (T09): lifecycle only. Health-probe demotion (T11) and per-task restart on non-fatal
+    /// crash (caller's responsibility) are out of scope here.
+    /// </summary>
+    public async Task<ScanSummary> RunAsync(
+        IReadOnlyList<WatchTask> tasks,
+        WatchOptions optionsTemplate,
+        CancellationToken externalCt)
+    {
+        if (tasks is null) { throw new ArgumentNullException(nameof(tasks)); }
+        if (optionsTemplate is null) { throw new ArgumentNullException(nameof(optionsTemplate)); }
+
+        if (tasks.Count == 0)
+        {
+            _log.Warning("watch supervisor: no tasks to run; returning empty summary");
+            return EmptySummary();
+        }
+
+        _log.Information("watch supervisor: starting {Count} tasks", tasks.Count);
+
+        var perTaskRuns = new List<Task<ScanSummary>>(tasks.Count);
+        foreach (var task in tasks)
+        {
+            var perTaskOptions = optionsTemplate with { InputDirs = new[] { task.Input.Path } };
+            perTaskRuns.Add(RunOneTaskIsolated(task, perTaskOptions, externalCt));
+        }
+
+        // External cancellation: signal every task to drain. Registration is disposed on exit
+        // so we don't leak a callback after the supervisor's RunAsync returns.
+        using var externalReg = externalCt.Register(() =>
+        {
+            _log.Information("watch supervisor: external cancellation; signaling all tasks to drain");
+            foreach (var t in tasks) { t.Cancel(); }
+        });
+
+        var summaries = await Task.WhenAll(perTaskRuns).ConfigureAwait(false);
+        var total = AggregateSummaries(summaries);
+        _log.Information(
+            "watch supervisor: all {Count} tasks completed; aggregate Ok={Ok} Failed={Failed}",
+            tasks.Count, total.Ok, total.IntegrityFailed + total.Errors);
+        return total;
+    }
+
+    private async Task<ScanSummary> RunOneTaskIsolated(
+        WatchTask task,
+        WatchOptions options,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await task.RunAsync(options, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Expected on shutdown drain — contribute empty.
+            return EmptySummary();
+        }
+        catch (Exception ex)
+        {
+            // Non-fatal crash escaped WatchTask.RunAsync (rethrown by design for the supervisor
+            // to handle). T09 isolates from siblings only — restart policy is out of scope.
+            _log.Warning(ex, "[watch={Base}] task crashed; isolated from other tasks", task.Input.BaseName);
+            return EmptySummary();
+        }
+    }
+
+    private static ScanSummary AggregateSummaries(IReadOnlyList<ScanSummary> perTask)
+    {
+        int processed = 0, ok = 0, skipped = 0, unknown = 0, integrityFailed = 0, errors = 0;
+        TimeSpan duration = TimeSpan.Zero;
+        foreach (var s in perTask)
+        {
+            processed += s.Processed;
+            ok += s.Ok;
+            skipped += s.Skipped;
+            unknown += s.UnknownFormat;
+            integrityFailed += s.IntegrityFailed;
+            errors += s.Errors;
+            duration += s.Duration;
+        }
+        return new ScanSummary(processed, ok, skipped, unknown, integrityFailed, errors, duration);
+    }
+
+    private static ScanSummary EmptySummary() =>
+        new ScanSummary(
+            Processed: 0,
+            Ok: 0,
+            Skipped: 0,
+            UnknownFormat: 0,
+            IntegrityFailed: 0,
+            Errors: 0,
+            Duration: TimeSpan.Zero);
 }
