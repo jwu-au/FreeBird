@@ -5,6 +5,37 @@ All notable changes to FreeBird are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.0] — 2026-06-13
+
+### Added
+- **Multi-input watch & scan**: `fb scan dir1 dir2` and `fb watch dir1 dir2` accept one or more input directories; outputs share a single flat output directory.
+- **GlobalApiRateLimiter** (`--api-concurrency N`, default 4, max 16): caps in-flight NetEase API requests process-wide.
+- **TokenBucketRateLimiter** wires `--api-rate-limit` to actual throttling on NetEase API calls.
+- **OutputPathMutexPool**: serialises writes per output path so identical filenames from different inputs cannot race.
+- **WatchSupervisor**: orchestrates one WatchTask per input directory; concurrent fan-out via `Task.WhenAll`; per-task failure isolation; graceful drain on Ctrl-C.
+- **HealthProbe** (5-minute interval): demotes tasks whose input directory vanished; resurrects DEAD tasks when their directory reappears.
+- **WatchTask state machine**: Initializing → Active → Dead → Resurrecting → Active, with 60-second sliding crash window (3 crashes / 60s → DEAD).
+- **Log enrichment**: `[watch=<basename>]` prefix on per-task log messages.
+
+### Fixed
+- `--api-rate-limit` was a silent no-op since v3.0 (configurable but never enforced). Now correctly throttles outgoing NetEase API requests via token bucket.
+- Concurrent writes to the same output path (rare same-musicId race) could collide; now serialized via mutex pool.
+- `OutputPathMutexPool` dispose-vs-token-dispose race (could throw `ObjectDisposedException` if pool was disposed before all tokens).
+
+### Changed
+- `WatchOptions.InputDir` (string) renamed to `WatchOptions.InputDirs` (`IReadOnlyList<string>`) — internal API only.
+- `ScanOptions.InputDirectory` (string) renamed to `ScanOptions.InputDirectories` (`IReadOnlyList<string>`) — internal API only.
+- `ScanRunner.RunAsync` first parameter is now `IReadOnlyList<string>` instead of `string` — internal API only.
+- CLI argument name `<input-dir>` is now `<input-dirs>` (positional, accepts 1+).
+
+### Backward compatibility
+- All single-input invocations continue to work identically: `fb scan ~/cache --output ~/music` and `fb watch ~/cache --output ~/music`.
+- Sidecar contract from v3.2.0 unchanged (regression-tested).
+- File output naming & integrity behavior unchanged.
+
+### Notes
+- 271 new tests added (727 → 998); 997 passing + 8 skipped (platform-gated). Zero warnings.
+
 ## [3.3.2] — 2026-06-11
 
 ### Fixed

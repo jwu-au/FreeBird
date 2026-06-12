@@ -9,6 +9,20 @@ One-sweep CLI to decrypt NetEase Cloud Music `.uc` / `.uc!` cache files (XOR `0x
 
 ---
 
+## What's new in v3.4
+
+**Multi-input scan & watch** + **end-to-end API throttling**:
+
+- `fb scan` and `fb watch` now accept **one or more input directories** as positional args; outputs land in a single flat output directory.
+- `--api-rate-limit` is **now actually enforced** (was a silent no-op in v3.0–v3.3) via an internal token-bucket limiter.
+- New flag `--api-concurrency N` (default 4, max 16) caps in-flight NetEase API requests process-wide — protects NetEase when fanning out across many inputs.
+- New `WatchSupervisor` runs one task per input directory, isolates per-task failures, and includes a 5-minute `HealthProbe` that demotes tasks whose input dir vanished and resurrects them when the dir reappears.
+- Backward compatible: every single-input invocation from v3.0–v3.3 keeps working unchanged.
+
+See [Multi-input scan and watch](#multi-input-scan-and-watch-new-in-v34) below.
+
+---
+
 ## What's new in v3.1
 
 **Bundled FLAC binary support**:
@@ -157,8 +171,11 @@ Without `metaflac` (FLAC tag writing): tag write is silently skipped for FLAC fi
 ## Usage
 
 ```
-fb scan <input-dir> --output <output-dir> [options]
+fb scan <input-dirs>... --output <output-dir> [options]
 ```
+
+`<input-dirs>` accepts one or more directories (v3.4+). For a single directory the
+syntax is unchanged from v3.0–v3.3.
 
 ### Example
 
@@ -180,7 +197,9 @@ fb.exe scan "C:\Users\you\AppData\Local\Netease\CloudMusic\Cache\Cache" `
 |------|---------|-------------|
 | `-o, --output <dir>` | required | Output directory for decoded files. Created if missing. |
 | `--integrity <level>` | `auto` | One of `auto` / `l1` / `l3` / `off`. See [Integrity levels](#integrity-levels). |
-| `--concurrency <n>` | `4` | Number of files processed in parallel. |
+| `--concurrency <n>` | `4` | Max files processed in parallel across ALL inputs. |
+| `--api-concurrency <n>` | `4` | Max in-flight NetEase API requests (1–16). Global across all inputs. (v3.4+) |
+| `--api-rate-limit <n>` | `0` | Max NetEase API calls/sec (0 = unlimited). Now actually enforced. (v3.4 fix) |
 | `--on-collision <policy>` | `skip` | `skip` or `overwrite` when the output file already exists. |
 | `-v, --verbose` | `false` | Debug-level logging. |
 | `-q, --quiet` | `false` | Warning-level only. Mutually exclusive with `--verbose`. |
@@ -220,11 +239,14 @@ On macOS / Linux: prints a polite message pointing at the OS package manager (br
 
 ## `fb watch`
 
-Watch an input directory for new/changed `.uc` files and decode them as they stabilize. Runs until Ctrl-C.
+Watch one or more input directories for new/changed `.uc` files and decode them as they stabilize. Runs until Ctrl-C.
 
 ```
-fb watch <input-dir> --output <output-dir> [options]
+fb watch <input-dirs>... --output <output-dir> [options]
 ```
+
+`<input-dirs>` accepts one or more directories (v3.4+); see
+[Multi-input scan and watch](#multi-input-scan-and-watch-new-in-v34).
 
 ### Example
 
@@ -238,7 +260,9 @@ fb watch ~/Library/Caches/com.netease.163music/Caches -o ~/Music/Decoded
 |------|---------|-------------|
 | `-o, --output <dir>` | required | Output directory for decoded files. Created if missing. |
 | `--integrity <level>` | `auto` | One of `auto` / `l1` / `l3` / `off`. See [Integrity levels](#integrity-levels). |
-| `--concurrency <n>` | `4` | Max files processed in parallel (1-32). |
+| `--concurrency <n>` | `4` | Max files processed in parallel across ALL inputs (1-32). |
+| `--api-concurrency <n>` | `4` | Max in-flight NetEase API requests (1–16). Global across all inputs. (v3.4+) |
+| `--api-rate-limit <n>` | `0` | Max NetEase API calls/sec (0 = unlimited). Now actually enforced. (v3.4 fix) |
 | `--on-collision <policy>` | `skip` | `skip` or `overwrite` when the output file already exists. |
 | `--poll-interval <Ns\|Nm>` | `5s` | How often to poll the input directory. Range `1s`..`60m`. |
 | `--stability-checks <n>` | `2` | Consecutive equal-size polls required before treating a file as complete (1-10). |
@@ -279,6 +303,60 @@ By default `fb watch` writes a rolling log to:
 ### Exit codes
 
 Same mapping as `fb scan` — see [Exit codes](#exit-codes). Ctrl-C / SIGTERM exits with code `130`.
+
+---
+
+## Multi-input scan and watch (new in v3.4)
+
+Both `fb scan` and `fb watch` accept one or more input directories. Files from all
+directories are processed into a single shared output directory (flat layout).
+
+```bash
+# Process two NetEase cache directories at once
+fb scan ~/cache1 ~/cache2 --output ~/music
+
+# Watch multiple cache directories continuously
+fb watch ~/cache1 ~/cache2 ~/cache3 --output ~/music
+```
+
+### Concurrency & rate-limiting (also new in v3.4)
+
+- `--concurrency N` (default 4) — max files processed in parallel across ALL inputs
+- `--api-concurrency N` (default 4, max 16) — max in-flight NetEase API requests
+- `--api-rate-limit N` (req/sec) — NOW ACTUALLY ENFORCED (was a silent no-op in v3.0–v3.3)
+
+When running multiple input dirs, the API rate limiter and concurrency cap are
+global across all inputs — protecting NetEase from overload.
+
+### Same musicId across inputs
+
+If the same musicId appears in multiple input dirs (e.g., cached at different
+bitrates), the first one to finish wins. An internal output-mutex pool serializes
+writes per output path, preventing race conditions.
+
+### Failure isolation
+
+- `fb scan` fails-fast if any input directory doesn't exist.
+- `fb watch` tolerates missing inputs (logs `WARN`, watches the valid ones).
+- A vanished input dir during watch → its task auto-demotes to `DEAD`; the
+  `HealthProbe` resurrects it when the directory reappears (5-minute interval).
+
+### Behavior matrix
+
+| Scenario | Behavior |
+|---|---|
+| `fb scan dir1 dir2` (both valid) | Both processed concurrently into shared output. |
+| `fb scan dir1 missing` | Fails fast with non-zero exit; no work done. |
+| `fb watch dir1 missing dir3` | Watches `dir1` + `dir3`; logs `WARN` for `missing`; `HealthProbe` keeps trying. |
+| `dir1` deleted mid-watch | Its `WatchTask` goes `Active → Dead`; other tasks unaffected. |
+| `dir1` reappears | `HealthProbe` flips it `Dead → Resurrecting → Active`. |
+| Same musicId in `dir1` + `dir2` | First writer wins; output-mutex serializes the contended write. |
+| Ctrl-C / SIGTERM | All watch tasks drain gracefully; exit `130`. |
+
+### Log enrichment
+
+Per-task log messages are prefixed with `[watch=<basename>]` so you can tell
+which input directory produced each event.
 
 ---
 
