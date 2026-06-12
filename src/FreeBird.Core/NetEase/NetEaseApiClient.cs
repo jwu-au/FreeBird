@@ -85,6 +85,13 @@ public sealed class NetEaseApiClient : INetEaseApiClient
             // so a timeout while waiting in either gate naturally surfaces as
             // OperationCanceledException and is mapped to NetEaseApiResult.Timeout
             // below.
+            //
+            // Ordering rationale (MINOR-2): rate bucket FIRST because its wait
+            // is bounded (max ~1/cps seconds) — we acquire the bounded gate
+            // before reserving a potentially-unbounded concurrency slot. If
+            // downstream cancels between gates, 1 rate-bucket token is wasted
+            // (refills naturally over 1/cps sec) but no semaphore slot is held
+            // during the cancel window.
             await _rateBucket.AcquireAsync(linkedCts.Token).ConfigureAwait(false);
             using var slot = await _concurrencyGate.AcquireAsync(linkedCts.Token).ConfigureAwait(false);
 
