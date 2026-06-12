@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 using FreeBird.Core.Abstractions;
+using FreeBird.Core.Models;
 using Serilog;
 
 namespace FreeBird.Core.Watch;
@@ -37,6 +40,13 @@ public sealed class WatchTask
     private WatchTaskState _state;
     private IWatchOrchestrator? _currentOrchestrator;
 
+    // Optional crash-injection seam, used only by tests via the 5-arg constructor.
+    private readonly Func<Exception?>? _crashInjector;
+
+    // Per-task CTS for shutdown signaling. Created on RunAsync entry and cleared on exit.
+    // Read/written under _stateLock per T06 reviewer M3 (avoid captured-local TOCTOU).
+    private CancellationTokenSource? _taskCts;
+
     /// <summary>The watch descriptor this task is bound to.</summary>
     public WatchInput Input => _input;
 
@@ -57,11 +67,27 @@ public sealed class WatchTask
         Func<IWatchOrchestrator> orchestratorFactory,
         TimeProvider timeProvider,
         ILogger log)
+        : this(input, orchestratorFactory, timeProvider, log, crashInjector: null)
+    {
+    }
+
+    /// <summary>
+    /// Test-only constructor overload that adds a crash-injection seam invoked at the top of
+    /// <see cref="RunAsync"/> (before delegating to the wrapped orchestrator). Production code
+    /// should use the 4-argument constructor.
+    /// </summary>
+    public WatchTask(
+        WatchInput input,
+        Func<IWatchOrchestrator> orchestratorFactory,
+        TimeProvider timeProvider,
+        ILogger log,
+        Func<Exception?>? crashInjector)
     {
         _input = input ?? throw new ArgumentNullException(nameof(input));
         _orchestratorFactory = orchestratorFactory ?? throw new ArgumentNullException(nameof(orchestratorFactory));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _log = log ?? throw new ArgumentNullException(nameof(log));
+        _crashInjector = crashInjector;
 
         // Initial state: validate directory NOW (born-DEAD detection).
         if (!Directory.Exists(_input.Path))
@@ -188,4 +214,96 @@ public sealed class WatchTask
             return true;
         }
     }
+
+    /// <summary>
+    /// Run the wrapped orchestrator's polling loop until cancelled, errored, or DEAD.
+    /// Delegates to <see cref="IWatchOrchestrator.RunAsync"/> using a linked CTS so that
+    /// either the caller's cancellation or an internal <see cref="Cancel"/> propagates.
+    ///
+    /// Behavior:
+    /// - DEAD task → returns empty <see cref="ScanSummary"/> without invoking the orchestrator.
+    /// - Cancellation → propagates <see cref="OperationCanceledException"/> to caller.
+    /// - Non-fatal crash → calls <see cref="RecordCrash"/> and rethrows so the supervisor can restart.
+    /// - Fatal crash (threshold reached) → calls <see cref="RecordCrash"/>, transitions to DEAD,
+    ///   and returns an empty <see cref="ScanSummary"/> (graceful exit; supervisor sees DEAD on next probe).
+    /// </summary>
+    public async Task<ScanSummary> RunAsync(WatchOptions options, CancellationToken externalCt)
+    {
+        if (options is null) { throw new ArgumentNullException(nameof(options)); }
+
+        // Born-DEAD: return empty summary immediately, don't try to construct anything.
+        if (State == WatchTaskState.Dead)
+        {
+            _log.Warning("[watch={Base}] RunAsync called on DEAD task; returning empty summary", _input.BaseName);
+            return EmptySummary();
+        }
+
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(externalCt);
+
+        IWatchOrchestrator? orchestrator;
+        lock (_stateLock)
+        {
+            _taskCts = linkedCts;
+            orchestrator = _currentOrchestrator;
+        }
+
+        if (orchestrator is null)
+        {
+            // Race: state went DEAD between top-of-method check and lock acquisition.
+            lock (_stateLock) { _taskCts = null; }
+            _log.Warning("[watch={Base}] orchestrator unavailable at RunAsync entry", _input.BaseName);
+            return EmptySummary();
+        }
+
+        try
+        {
+            // Test-only crash injection BEFORE delegating.
+            var injected = _crashInjector?.Invoke();
+            if (injected is not null) { throw injected; }
+
+            return await orchestrator.RunAsync(options, linkedCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (linkedCts.IsCancellationRequested)
+        {
+            // Expected cancellation — propagate.
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Genuine crash — record + maybe transition to DEAD.
+            bool wentDead = RecordCrash(ex);
+            if (wentDead)
+            {
+                // Threshold reached. RecordCrash already logged at Error. Graceful exit
+                // so the supervisor sees DEAD on its next probe instead of an exception.
+                return EmptySummary();
+            }
+            // Non-fatal crash: rethrow so the supervisor can decide to restart.
+            throw;
+        }
+        finally
+        {
+            lock (_stateLock) { _taskCts = null; }
+        }
+    }
+
+    /// <summary>
+    /// Signal this task to cancel its current <see cref="RunAsync"/>. Used by the supervisor
+    /// for shutdown or probe-driven demotion. No-op if no run is in flight.
+    /// </summary>
+    public void Cancel()
+    {
+        CancellationTokenSource? cts;
+        lock (_stateLock) { cts = _taskCts; }
+        cts?.Cancel();
+    }
+
+    private static ScanSummary EmptySummary() => new ScanSummary(
+        Processed: 0,
+        Ok: 0,
+        Skipped: 0,
+        UnknownFormat: 0,
+        IntegrityFailed: 0,
+        Errors: 0,
+        Duration: TimeSpan.Zero);
 }
