@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -29,6 +30,12 @@ public sealed class WatchSupervisor
     private readonly Func<WatchInput, WatchTask> _taskFactory;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger _log;
+
+    // T10: tasks currently being managed by an in-flight RunAsync. Read by HealthProbe (T11)
+    // via GetManagedTasks/GetDeadTasks/GetActiveTasks. Set under _managedLock at the start of
+    // RunAsync and cleared in the finally block; null when no run is in flight.
+    private readonly object _managedLock = new();
+    private IReadOnlyList<WatchTask>? _managedTasks;
 
     public WatchSupervisor(
         Func<WatchInput, WatchTask> taskFactory,
@@ -156,28 +163,75 @@ public sealed class WatchSupervisor
 
         _log.Information("watch supervisor: starting {Count} tasks", tasks.Count);
 
-        var perTaskRuns = new List<Task<ScanSummary>>(tasks.Count);
-        foreach (var task in tasks)
+        // T10: publish the task list so HealthProbe (T11) accessors can inspect it.
+        // Cleared in finally regardless of completion path.
+        lock (_managedLock) { _managedTasks = tasks; }
+        try
         {
-            var perTaskOptions = optionsTemplate with { InputDirs = new[] { task.Input.Path } };
-            perTaskRuns.Add(RunOneTaskIsolated(task, perTaskOptions, externalCt));
+            var perTaskRuns = new List<Task<ScanSummary>>(tasks.Count);
+            foreach (var task in tasks)
+            {
+                var perTaskOptions = optionsTemplate with { InputDirs = new[] { task.Input.Path } };
+                perTaskRuns.Add(RunOneTaskIsolated(task, perTaskOptions, externalCt));
+            }
+
+            // External cancellation: signal every task to drain. Registration is disposed on exit
+            // so we don't leak a callback after the supervisor's RunAsync returns.
+            using var externalReg = externalCt.Register(() =>
+            {
+                _log.Information("watch supervisor: external cancellation; signaling all tasks to drain");
+                foreach (var t in tasks) { t.Cancel(); }
+            });
+
+            var summaries = await Task.WhenAll(perTaskRuns).ConfigureAwait(false);
+            var total = AggregateSummaries(summaries);
+            _log.Information(
+                "watch supervisor: all {Count} tasks completed; aggregate Ok={Ok} Failed={Failed}",
+                tasks.Count, total.Ok, total.IntegrityFailed + total.Errors);
+            return total;
         }
-
-        // External cancellation: signal every task to drain. Registration is disposed on exit
-        // so we don't leak a callback after the supervisor's RunAsync returns.
-        using var externalReg = externalCt.Register(() =>
+        finally
         {
-            _log.Information("watch supervisor: external cancellation; signaling all tasks to drain");
-            foreach (var t in tasks) { t.Cancel(); }
-        });
-
-        var summaries = await Task.WhenAll(perTaskRuns).ConfigureAwait(false);
-        var total = AggregateSummaries(summaries);
-        _log.Information(
-            "watch supervisor: all {Count} tasks completed; aggregate Ok={Ok} Failed={Failed}",
-            tasks.Count, total.Ok, total.IntegrityFailed + total.Errors);
-        return total;
+            lock (_managedLock) { _managedTasks = null; }
+        }
     }
+
+    /// <summary>
+    /// Snapshot of <see cref="WatchTask"/> instances currently being managed by an in-flight
+    /// <see cref="RunAsync"/>. Returns an empty list when no run is in flight.
+    ///
+    /// Returns a copy: the caller may iterate freely without holding the internal lock, and
+    /// subsequent supervisor lifecycle transitions do not mutate the returned list.
+    ///
+    /// Intended consumer: <c>HealthProbe</c> (T11). Read-only — does NOT mutate task state.
+    /// </summary>
+    public IReadOnlyList<WatchTask> GetManagedTasks()
+    {
+        lock (_managedLock)
+        {
+            return _managedTasks is null
+                ? Array.Empty<WatchTask>()
+                : _managedTasks.ToList();
+        }
+    }
+
+    /// <summary>
+    /// Snapshot of currently-managed tasks in <see cref="WatchTaskState.Dead"/>. Used by
+    /// <c>HealthProbe</c> (T11) to identify candidates for resurrection. Each task's
+    /// <see cref="WatchTask.State"/> is read once at snapshot time; concurrent transitions
+    /// are tolerated (no torn-read risk because <see cref="WatchTask.State"/> is itself
+    /// lock-guarded).
+    /// </summary>
+    public IReadOnlyList<WatchTask> GetDeadTasks()
+        => GetManagedTasks().Where(t => t.State == WatchTaskState.Dead).ToList();
+
+    /// <summary>
+    /// Snapshot of currently-managed tasks in <see cref="WatchTaskState.Active"/>. Used by
+    /// <c>HealthProbe</c> (T11) to detect vanished input directories. Same snapshot semantics
+    /// as <see cref="GetDeadTasks"/>.
+    /// </summary>
+    public IReadOnlyList<WatchTask> GetActiveTasks()
+        => GetManagedTasks().Where(t => t.State == WatchTaskState.Active).ToList();
 
     private async Task<ScanSummary> RunOneTaskIsolated(
         WatchTask task,
