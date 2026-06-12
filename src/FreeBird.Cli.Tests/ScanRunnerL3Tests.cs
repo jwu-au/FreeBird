@@ -67,7 +67,7 @@ public class ScanRunnerL3Tests : IDisposable
             TestFixtures.SampleFlacPath, _inputDir, "good.uc");
 
         var exitCode = await ScanRunner.RunAsync(
-            _inputDir, _outputDir,
+            new[] { _inputDir }, _outputDir,
             IntegrityLevel.L3,    // real flac -t path
             concurrency: 1,
             collision: CollisionPolicy.Skip,
@@ -100,7 +100,7 @@ public class ScanRunnerL3Tests : IDisposable
             TestFixtures.SampleFlacPath, _inputDir, "auto-flac.uc");
 
         var exitCode = await ScanRunner.RunAsync(
-            _inputDir, _outputDir,
+            new[] { _inputDir }, _outputDir,
             IntegrityLevel.Auto,
             1, CollisionPolicy.Skip, false, false);
 
@@ -127,7 +127,7 @@ public class ScanRunnerL3Tests : IDisposable
         await File.WriteAllBytesAsync(ucPath, encrypted);
 
         var exitCode = await ScanRunner.RunAsync(
-            _inputDir, _outputDir,
+            new[] { _inputDir }, _outputDir,
             IntegrityLevel.L3,
             1, CollisionPolicy.Skip, false, false);
 

@@ -44,7 +44,7 @@ public class ScanRunnerEndToEndTests : IDisposable
             TestFixtures.SampleMp3Path, _inputDir, "42-song.uc");
 
         var exitCode = await ScanRunner.RunAsync(
-            _inputDir, _outputDir,
+            new[] { _inputDir }, _outputDir,
             IntegrityLevel.L1,
             concurrency: 1,
             collision: CollisionPolicy.Skip,
@@ -74,7 +74,7 @@ public class ScanRunnerEndToEndTests : IDisposable
             TestFixtures.SampleMp3Path, _inputDir, "99-mac.uc!");
 
         var exitCode = await ScanRunner.RunAsync(
-            _inputDir, _outputDir,
+            new[] { _inputDir }, _outputDir,
             IntegrityLevel.L1, 1, CollisionPolicy.Skip, false);
 
         exitCode.Should().Be(ScanRunner.ExitOk);
@@ -88,7 +88,7 @@ public class ScanRunnerEndToEndTests : IDisposable
             TestFixtures.SampleFlacPath, _inputDir, "flac-test.uc");
 
         var exitCode = await ScanRunner.RunAsync(
-            _inputDir, _outputDir,
+            new[] { _inputDir }, _outputDir,
             IntegrityLevel.L1,
             1, CollisionPolicy.Skip, false);
 
@@ -112,7 +112,7 @@ public class ScanRunnerEndToEndTests : IDisposable
         }
 
         var exitCode = await ScanRunner.RunAsync(
-            _inputDir, _outputDir,
+            new[] { _inputDir }, _outputDir,
             IntegrityLevel.L1, 2, CollisionPolicy.Skip, false);
 
         exitCode.Should().Be(ScanRunner.ExitOk);
@@ -133,7 +133,7 @@ public class ScanRunnerEndToEndTests : IDisposable
         await File.WriteAllTextAsync(existing, "SENTINEL");
 
         var exitCode = await ScanRunner.RunAsync(
-            _inputDir, _outputDir,
+            new[] { _inputDir }, _outputDir,
             IntegrityLevel.L1, 1, CollisionPolicy.Skip, false);
 
         exitCode.Should().Be(ScanRunner.ExitOk);
@@ -150,7 +150,7 @@ public class ScanRunnerEndToEndTests : IDisposable
         await File.WriteAllTextAsync(existing, "OLD");
 
         var exitCode = await ScanRunner.RunAsync(
-            _inputDir, _outputDir,
+            new[] { _inputDir }, _outputDir,
             IntegrityLevel.L1, 1, CollisionPolicy.Overwrite, false);
 
         exitCode.Should().Be(ScanRunner.ExitOk);
@@ -182,7 +182,7 @@ public class ScanRunnerEndToEndTests : IDisposable
         await File.WriteAllBytesAsync(ucPath, encrypted);
 
         var exitCode = await ScanRunner.RunAsync(
-            _inputDir, _outputDir,
+            new[] { _inputDir }, _outputDir,
             IntegrityLevel.L1,
             1, CollisionPolicy.Skip, false, false);
 

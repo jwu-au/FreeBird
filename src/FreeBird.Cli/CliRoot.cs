@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.CommandLine;
 using System.Threading.Tasks;
 using FreeBird.Core.Models;
@@ -19,9 +20,13 @@ public static class CliRoot
 
     public static RootCommand Build()
     {
-        var inputArg = new Argument<string>("input-dir")
+        // T14/T15 (v3.4): scan accepts one or more positional input directories.
+        // OneOrMore arity preserves backward compat (single dir still works) and
+        // System.CommandLine treats subsequent `--option`-prefixed tokens as the boundary.
+        var inputArg = new Argument<List<string>>("input-dirs")
         {
-            Description = "Directory containing .uc / .uc! cache files to decode.",
+            Arity = ArgumentArity.OneOrMore,
+            Description = "One or more directories to scan for .uc / .uc! cache files.",
         };
 
         var outputOpt = new Option<string>("--output", "-o")
@@ -113,7 +118,7 @@ public static class CliRoot
         };
 
         var scanCommand = new Command("scan",
-            "Decode all .uc/.uc! files in <input-dir>, write decoded audio to --output.")
+            "Decode all .uc/.uc! files in one or more <input-dirs>, write decoded audio to --output.")
         {
             inputArg, outputOpt, integrityOpt, concurrencyOpt, collisionOpt, verboseOpt, quietOpt,
             namingTemplateOpt, offlineOpt, apiTimeoutOpt, apiRateLimitOpt, writeTagsOpt, noWriteTagsOpt,
@@ -122,6 +127,7 @@ public static class CliRoot
 
         scanCommand.SetAction(async (parseResult, ct) =>
         {
+            // T14/T15 (v3.4): positional argument is now List<string> (OneOrMore arity).
             var input = parseResult.GetValue(inputArg)!;
             var output = parseResult.GetValue(outputOpt)!;
             var integrity = parseResult.GetValue(integrityOpt);
@@ -148,6 +154,7 @@ public static class CliRoot
                 return validationExit.Value;
             }
 
+            // T14/T15: `input` is List<string>; ScanRunner accepts IReadOnlyList<string>.
             return await ScanRunner.RunAsync(
                 input, output, integrity, concurrency, collision, verbose, quiet,
                 namingTemplate, offline, apiTimeout, apiRateLimit, writeTags,

@@ -42,7 +42,7 @@ public class ScanRunnerCliFlagsTests : IDisposable
     public async Task RunAsync_QuietFlag_OnlyWarningsAndAbove_StillExitOk()
     {
         var exit = await ScanRunner.RunAsync(
-            _inputDir, _outputDir,
+            new[] { _inputDir }, _outputDir,
             IntegrityLevel.Off,
             concurrency: 1,
             collision: CollisionPolicy.Skip,
@@ -56,7 +56,7 @@ public class ScanRunnerCliFlagsTests : IDisposable
     public async Task RunAsync_BothVerboseAndQuiet_ReturnsBadArgs()
     {
         var exit = await ScanRunner.RunAsync(
-            _inputDir, _outputDir,
+            new[] { _inputDir }, _outputDir,
             IntegrityLevel.Off,
             concurrency: 1,
             collision: CollisionPolicy.Skip,
@@ -82,7 +82,7 @@ public class ScanRunnerCliFlagsTests : IDisposable
         }
 
         var exit = await ScanRunner.RunAsync(
-            _inputDir, _outputDir,
+            new[] { _inputDir }, _outputDir,
             IntegrityLevel.L3,
             concurrency: 1,
             collision: CollisionPolicy.Skip,
@@ -270,7 +270,7 @@ public class ScanRunnerCliFlagsTests : IDisposable
         try
         {
             var exit = await ScanRunner.RunAsync(
-                _inputDir, _outputDir,
+                new[] { _inputDir }, _outputDir,
                 IntegrityLevel.Off,
                 concurrency: 1,
                 collision: CollisionPolicy.Skip,
@@ -312,7 +312,7 @@ public class ScanRunnerCliFlagsTests : IDisposable
             try
             {
                 var exit = await ScanRunner.RunAsync(
-                    _inputDir, _outputDir,
+                    new[] { _inputDir }, _outputDir,
                     IntegrityLevel.Off,
                     concurrency: 1,
                     collision: CollisionPolicy.Skip,
@@ -354,7 +354,7 @@ public class ScanRunnerCliFlagsTests : IDisposable
         try
         {
             var exit = await ScanRunner.RunAsync(
-                _inputDir, _outputDir,
+                new[] { _inputDir }, _outputDir,
                 IntegrityLevel.Off,
                 concurrency: 1,
                 collision: CollisionPolicy.Skip,

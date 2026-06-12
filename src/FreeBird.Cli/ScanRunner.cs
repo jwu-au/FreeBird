@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Autofac;
@@ -42,7 +44,7 @@ public static class ScanRunner
     public static Func<ScanOptions, Task<int>>? RunnerOverride { get; set; }
 
     public static async Task<int> RunAsync(
-        string inputDir,
+        IReadOnlyList<string> inputDirs,
         string outputDir,
         IntegrityLevel integrity,
         int concurrency,
@@ -74,19 +76,35 @@ public static class ScanRunner
         ILogger logger = BuildLogger(verbose, quiet);
         try
         {
-            if (!Directory.Exists(inputDir))
+            // T14/T15 (v3.4): validate ALL input directories exist (fail-fast per spec §2.5).
+            // System.CommandLine OneOrMore arity guarantees inputDirs.Count >= 1 when called
+            // from the CLI, but ScanRunner is also called directly from tests, so we still
+            // defensively check both null/empty and per-element existence.
+            if (inputDirs is null || inputDirs.Count == 0)
             {
-                logger.Error("Input directory not found: {Input}", inputDir);
+                logger.Error("At least one input directory is required.");
+                return ExitBadArgs;
+            }
+            var missingInputs = inputDirs.Where(d => !Directory.Exists(d)).ToList();
+            if (missingInputs.Count > 0)
+            {
+                foreach (var m in missingInputs)
+                {
+                    logger.Error("Input directory not found: {Input}", m);
+                }
                 return ExitBadArgs;
             }
 
             Directory.CreateDirectory(outputDir);
 
+            // T14/T15: normalize every input dir up-front so downstream sees full paths.
+            var normalizedInputs = inputDirs.Select(d => Path.GetFullPath(d)).ToArray();
+
             // T19b: short-circuit for tests that only want to capture the resolved options.
             if (RunnerOverride is not null)
             {
                 var capturedOptions = new ScanOptions(
-                    new[] { Path.GetFullPath(inputDir) },
+                    normalizedInputs,
                     Path.GetFullPath(outputDir),
                     integrity,
                     Math.Max(1, concurrency),
@@ -136,7 +154,7 @@ public static class ScanRunner
 
             var orchestrator = scope.Resolve<IScanOrchestrator>();
             var options = new ScanOptions(
-                new[] { Path.GetFullPath(inputDir) },
+                normalizedInputs,
                 Path.GetFullPath(outputDir),
                 integrity,
                 Math.Max(1, concurrency),

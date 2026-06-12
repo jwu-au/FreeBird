@@ -35,7 +35,7 @@ public class ScanRunnerEmptyDirTests : IDisposable
     public async Task RunAsync_EmptyInputDir_ReturnsExitOk()
     {
         var exitCode = await ScanRunner.RunAsync(
-            _inputDir, _outputDir,
+            new[] { _inputDir }, _outputDir,
             IntegrityLevel.Auto,
             concurrency: 1,
             collision: CollisionPolicy.Skip,
@@ -48,7 +48,7 @@ public class ScanRunnerEmptyDirTests : IDisposable
     public async Task RunAsync_EmptyInputDir_DoesNotCreateUnexpectedFiles()
     {
         await ScanRunner.RunAsync(
-            _inputDir, _outputDir,
+            new[] { _inputDir }, _outputDir,
             IntegrityLevel.Off, // Off keeps it cheapest — we just want to verify no spurious output
             concurrency: 1,
             collision: CollisionPolicy.Skip,
@@ -66,7 +66,7 @@ public class ScanRunnerEmptyDirTests : IDisposable
     {
         var missing = Path.Combine(_tempDir, "does-not-exist");
         var exitCode = await ScanRunner.RunAsync(
-            missing, _outputDir,
+            new[] { missing }, _outputDir,
             IntegrityLevel.Auto, 1, CollisionPolicy.Skip, false);
 
         exitCode.Should().Be(ScanRunner.ExitBadArgs);
@@ -79,7 +79,7 @@ public class ScanRunnerEmptyDirTests : IDisposable
         Directory.Exists(newOutput).Should().BeFalse();
 
         var exitCode = await ScanRunner.RunAsync(
-            _inputDir, newOutput,
+            new[] { _inputDir }, newOutput,
             IntegrityLevel.Auto, 1, CollisionPolicy.Skip, false);
 
         exitCode.Should().Be(ScanRunner.ExitOk);
@@ -93,7 +93,7 @@ public class ScanRunnerEmptyDirTests : IDisposable
         await File.WriteAllTextAsync(Path.Combine(_inputDir, "music.mp3"), "not a uc file");
 
         var exitCode = await ScanRunner.RunAsync(
-            _inputDir, _outputDir,
+            new[] { _inputDir }, _outputDir,
             IntegrityLevel.Auto, 1, CollisionPolicy.Skip, false);
 
         exitCode.Should().Be(ScanRunner.ExitOk);

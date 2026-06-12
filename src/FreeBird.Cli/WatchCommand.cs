@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.CommandLine;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using FreeBird.Core.Models;
 
@@ -26,9 +28,13 @@ public static class WatchCommand
 
     public static Command Build()
     {
-        var inputArg = new Argument<string>("input-dir")
+        // T14/T15 (v3.4): watch accepts one or more positional input directories.
+        // OneOrMore arity preserves backward compat (single dir still works) and
+        // System.CommandLine treats subsequent `--option`-prefixed tokens as the boundary.
+        var inputArg = new Argument<List<string>>("input-dirs")
         {
-            Description = "Directory to watch for new .uc / .uc! cache files.",
+            Arity = ArgumentArity.OneOrMore,
+            Description = "One or more directories to watch for new .uc / .uc! cache files.",
         };
 
         var outputOpt = new Option<string>("--output", "-o")
@@ -182,7 +188,8 @@ public static class WatchCommand
 
         watchCommand.SetAction(async (parseResult, ct) =>
         {
-            var input = parseResult.GetValue(inputArg)!;
+            // T14/T15 (v3.4): positional argument is now List<string> (OneOrMore arity).
+            var inputs = parseResult.GetValue(inputArg)!;
             var output = parseResult.GetValue(outputOpt)!;
             var integrity = parseResult.GetValue(integrityOpt);
             var concurrency = parseResult.GetValue(concurrencyOpt);
@@ -269,10 +276,21 @@ public static class WatchCommand
                 return ExitBadArgs;
             }
 
-            // Validate input exists
-            if (!Directory.Exists(input))
+            // Validate ALL input dirs exist (fail-fast per spec §2.5).
+            // System.CommandLine with OneOrMore arity guarantees inputs.Count >= 1,
+            // but we still defensively check to keep the action behavior explicit.
+            if (inputs is null || inputs.Count == 0)
             {
-                Console.Error.WriteLine($"Input directory not found: {input}");
+                Console.Error.WriteLine("Error: at least one input directory is required");
+                return ExitBadArgs;
+            }
+            var missingInputs = inputs.Where(d => !Directory.Exists(d)).ToList();
+            if (missingInputs.Count > 0)
+            {
+                foreach (var m in missingInputs)
+                {
+                    Console.Error.WriteLine($"Input directory not found: {m}");
+                }
                 return ExitBadArgs;
             }
 
@@ -290,7 +308,7 @@ public static class WatchCommand
 
             var opts = new WatchOptions
             {
-                InputDirs = new[] { input },
+                InputDirs = inputs.ToArray(),
                 OutputDir = output,
                 Integrity = integrity,
                 Concurrency = concurrency,

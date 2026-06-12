@@ -61,7 +61,7 @@ public class MetadataE2ETests
         try
         {
             var exit = await ScanRunner.RunAsync(
-                input, output,
+                new[] { input }, output,
                 IntegrityLevel.Off,
                 concurrency: 1,
                 collision: CollisionPolicy.Skip,
@@ -97,7 +97,7 @@ public class MetadataE2ETests
         try
         {
             var exit = await ScanRunner.RunAsync(
-                input, output,
+                new[] { input }, output,
                 IntegrityLevel.Off,
                 concurrency: 1,
                 collision: CollisionPolicy.Skip,
@@ -138,7 +138,7 @@ public class MetadataE2ETests
         try
         {
             var exit = await ScanRunner.RunAsync(
-                input, output,
+                new[] { input }, output,
                 IntegrityLevel.Off,
                 concurrency: 1,
                 collision: CollisionPolicy.Skip,
@@ -190,7 +190,7 @@ public class MetadataE2ETests
         try
         {
             var exit = await ScanRunner.RunAsync(
-                input, output,
+                new[] { input }, output,
                 IntegrityLevel.Off,
                 concurrency: 1,
                 collision: CollisionPolicy.Skip,
@@ -238,7 +238,7 @@ public class MetadataE2ETests
         try
         {
             var exit = await ScanRunner.RunAsync(
-                input, output,
+                new[] { input }, output,
                 IntegrityLevel.Off,
                 concurrency: 1,
                 collision: CollisionPolicy.Skip,
