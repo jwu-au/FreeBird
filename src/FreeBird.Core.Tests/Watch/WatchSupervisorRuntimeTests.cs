@@ -391,6 +391,49 @@ public sealed class WatchSupervisorRuntimeTests : IDisposable
         summary.Duration.Should().Be(TimeSpan.FromMilliseconds(300));
     }
 
+    // ---- Test 12.5 (T11 bug-fix verification) ----
+    [Fact]
+    public async Task RunAsync_TaskDrainedByProbe_NoSpuriousWarn()
+    {
+        // Simulate the T11 probe-drain scenario: external CT is NOT cancelled, but a sibling
+        // calls task.Cancel() on one of the tasks (mimicking HealthProbe demote). The
+        // supervisor's RunOneTaskIsolated must classify the resulting OCE as a benign drain
+        // (because task.IsDraining is set) and NOT emit a WARN log.
+        var logger = new Mock<ILogger>();
+        var dir = NewTempDir();
+        var entered = new TaskCompletionSource();
+        var orch = new Mock<IWatchOrchestrator>();
+        orch.Setup(o => o.RunAsync(It.IsAny<WatchOptions>(), It.IsAny<CancellationToken>(), It.IsAny<CancellationToken>()))
+            .Returns<WatchOptions, CancellationToken, CancellationToken>(async (_, ct, _) =>
+            {
+                entered.TrySetResult();
+                await Task.Delay(Timeout.Infinite, ct).ConfigureAwait(false);
+                return MakeSummary();
+            });
+        var task = MakeTaskWithOrchestrator(dir, orch.Object);
+
+        var sup = MakeSupervisor(logger.Object);
+        using var externalCts = new CancellationTokenSource();
+        var run = sup.RunAsync(new[] { task }, MakeOptionsTemplate(NewTempDir()), externalCts.Token);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Probe-style drain: directly cancel the task while external CT remains live.
+        task.Cancel();
+        task.IsDraining.Should().BeTrue();
+
+        var summary = await run.WaitAsync(TimeSpan.FromSeconds(5));
+        summary.Should().NotBeNull();
+
+        // The supervisor MUST NOT have logged the WARN "[watch={Base}] task crashed; isolated"
+        // for this probe-drain. (Before the T11 OCE-filter widening, this would fail.)
+        logger.Verify(
+            l => l.Warning(
+                It.IsAny<Exception>(),
+                "[watch={Base}] task crashed; isolated from other tasks",
+                It.IsAny<string>()),
+            Times.Never);
+    }
+
     // ---- Test 13 ----
     [Fact]
     public async Task RunAsync_LogsStartAndComplete()

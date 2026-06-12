@@ -307,6 +307,20 @@ public sealed class WatchTaskRuntimeTests : IDisposable
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
 
+    // ---- Test 12.5 (T11) ----
+    [Fact]
+    public void Cancel_SetsIsDrainingFlag()
+    {
+        var dir = NewTempDir();
+        var input = MakeInput(dir);
+        var task = new WatchTask(input, () => new Mock<IWatchOrchestrator>().Object, new FakeTimeProvider(), _silentLogger);
+        task.IsDraining.Should().BeFalse();
+
+        task.Cancel();
+
+        task.IsDraining.Should().BeTrue();
+    }
+
     // ---- Test 12 ----
     [Fact]
     public async Task RunAsync_OrchestratorReturnsNormally_TaskStaysActive()

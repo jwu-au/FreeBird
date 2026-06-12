@@ -47,8 +47,22 @@ public sealed class WatchTask
     // Read/written under _stateLock per T06 reviewer M3 (avoid captured-local TOCTOU).
     private CancellationTokenSource? _taskCts;
 
+    // T11: latched-on flag set by Cancel() so the supervisor's RunOneTaskIsolated can
+    // distinguish a probe-initiated drain from a genuine crash when the external CT is
+    // NOT cancelled. Reset to 0 by TryResurrect() so a resurrected task starts fresh.
+    // Accessed via Interlocked so it's safe to read without holding _stateLock.
+    private int _isDraining;
+
     /// <summary>The watch descriptor this task is bound to.</summary>
     public WatchInput Input => _input;
+
+    /// <summary>
+    /// True if <see cref="Cancel"/> was called (e.g. by <c>HealthProbe</c> on directory-vanish demote
+    /// or by the supervisor on shutdown). Stays true until the next successful <see cref="TryResurrect"/>.
+    /// Used by <c>WatchSupervisor.RunOneTaskIsolated</c> to identify probe-initiated drains and avoid
+    /// logging them as spurious crashes.
+    /// </summary>
+    public bool IsDraining => Volatile.Read(ref _isDraining) == 1;
 
     /// <summary>Current lifecycle state. Thread-safe.</summary>
     public WatchTaskState State
@@ -178,6 +192,9 @@ public sealed class WatchTask
                 _currentOrchestrator = _orchestratorFactory();
                 _state = WatchTaskState.Active;
                 _crashTimestamps.Clear();
+                // T11: clear the latched draining flag so a resurrected task starts fresh
+                // (the OCE-vs-crash classifier in the supervisor sees a clean slate).
+                Interlocked.Exchange(ref _isDraining, 0);
                 _log.Information("[watch={Base}] resurrected to ACTIVE", _input.BaseName);
                 return true;
             }
@@ -305,6 +322,9 @@ public sealed class WatchTask
     /// </summary>
     public void Cancel()
     {
+        // T11: latch IsDraining BEFORE signalling the CTS so that the awaiting supervisor
+        // observes IsDraining=true the moment the OCE propagates out of RunAsync.
+        Interlocked.Exchange(ref _isDraining, 1);
         CancellationTokenSource? cts;
         lock (_stateLock) { cts = _taskCts; }
         try { cts?.Cancel(); } catch (ObjectDisposedException) { /* M4: harmless dispose race */ }

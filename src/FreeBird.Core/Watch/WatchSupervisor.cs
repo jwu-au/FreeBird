@@ -242,9 +242,11 @@ public sealed class WatchSupervisor
         {
             return await task.RunAsync(options, ct).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested || task.IsDraining)
         {
-            // Expected on shutdown drain — contribute empty.
+            // Expected on shutdown drain (external CT) OR probe-initiated drain (T11:
+            // HealthProbe demoted the task via Cancel() because the directory vanished).
+            // Either way, contribute empty without logging a spurious WARN.
             return EmptySummary();
         }
         catch (Exception ex)

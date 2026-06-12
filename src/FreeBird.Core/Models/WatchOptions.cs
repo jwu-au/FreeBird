@@ -81,4 +81,11 @@ public sealed record WatchOptions : IMetadataOptions
     /// <c>--write-tags</c>. Default: <c>true</c> (opt-out via <c>--no-write-tags</c>).
     /// </summary>
     public bool WriteTags { get; init; } = true;
+
+    /// <summary>
+    /// Interval between <c>HealthProbe</c> (T11) ticks. Each tick demotes ACTIVE tasks whose
+    /// watched directory has vanished and resurrects DEAD tasks whose directory has reappeared.
+    /// Default: 5 minutes.
+    /// </summary>
+    public TimeSpan HealthProbeInterval { get; init; } = TimeSpan.FromMinutes(5);
 }
