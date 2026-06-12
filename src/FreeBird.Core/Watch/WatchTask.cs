@@ -227,6 +227,12 @@ public sealed class WatchTask
     /// - Fatal crash (threshold reached) → calls <see cref="RecordCrash"/>, transitions to DEAD,
     ///   and returns an empty <see cref="ScanSummary"/> (graceful exit; supervisor sees DEAD on next probe).
     /// </summary>
+    /// <summary>
+    /// Run the wrapped orchestrator's polling loop until cancelled, errored, or DEAD.
+    /// Caller contract: NOT reentrant — a single WatchTask supports one concurrent run.
+    /// The supervisor (T09) is responsible for serializing per-task RunAsync calls.
+    /// Returns empty ScanSummary if task is born-DEAD or transitions to DEAD via crash threshold.
+    /// </summary>
     public async Task<ScanSummary> RunAsync(WatchOptions options, CancellationToken externalCt)
     {
         if (options is null) { throw new ArgumentNullException(nameof(options)); }
@@ -291,11 +297,17 @@ public sealed class WatchTask
     /// Signal this task to cancel its current <see cref="RunAsync"/>. Used by the supervisor
     /// for shutdown or probe-driven demotion. No-op if no run is in flight.
     /// </summary>
+    /// <summary>
+    /// Signal this task to cancel its current RunAsync (used by supervisor for shutdown / probe demote).
+    /// Thread-safe and idempotent. Tolerant of the narrow dispose race between snapshot and cancel
+    /// (reviewer M4): if the in-flight RunAsync's finally has cleared and disposed the linked CTS
+    /// between our snapshot and our Cancel call, we swallow ObjectDisposedException as a no-op.
+    /// </summary>
     public void Cancel()
     {
         CancellationTokenSource? cts;
         lock (_stateLock) { cts = _taskCts; }
-        cts?.Cancel();
+        try { cts?.Cancel(); } catch (ObjectDisposedException) { /* M4: harmless dispose race */ }
     }
 
     private static ScanSummary EmptySummary() => new ScanSummary(
