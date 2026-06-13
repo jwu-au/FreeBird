@@ -1,293 +1,165 @@
 # FreeBird
 
 [![CI](https://github.com/jwu-au/FreeBird/actions/workflows/ci.yml/badge.svg)](https://github.com/jwu-au/FreeBird/actions/workflows/ci.yml)
-[![Latest release](https://img.shields.io/github/v/release/jwu-au/FreeBird)](https://github.com/jwu-au/FreeBird/releases/latest)
+[![Release](https://img.shields.io/github/v/release/jwu-au/FreeBird)](https://github.com/jwu-au/FreeBird/releases)
+[![License](https://img.shields.io/badge/license-TBD-lightgrey.svg)](#license)
 
-One-sweep CLI to decrypt NetEase Cloud Music `.uc` / `.uc!` cache files (XOR `0xA3`) into clean MP3 / FLAC / M4A files, with optional audio-integrity verification.
+A friendly command-line tool that turns your **NetEase Cloud Music** offline cache files into clean, properly named, fully tagged **MP3 / FLAC / M4A** files you can play anywhere.
 
-> Cross-platform: macOS, Linux, Windows. Built on .NET 10.
-
----
-
-## What's new in v3.4
-
-**Multi-input scan & watch** + **end-to-end API throttling**:
-
-- `fb scan` and `fb watch` now accept **one or more input directories** as positional args; outputs land in a single flat output directory.
-- `--api-rate-limit` is **now actually enforced** (was a silent no-op in v3.0–v3.3) via an internal token-bucket limiter.
-- New flag `--api-concurrency N` (default 4, max 16) caps in-flight NetEase API requests process-wide — protects NetEase when fanning out across many inputs.
-- New `WatchSupervisor` runs one task per input directory, isolates per-task failures, and includes a 5-minute `HealthProbe` that demotes tasks whose input dir vanished and resurrects them when the dir reappears.
-- Backward compatible: every single-input invocation from v3.0–v3.3 keeps working unchanged.
-
-See [Multi-input scan and watch](#multi-input-scan-and-watch-new-in-v34) below.
+> Cross-platform: **macOS, Linux, Windows**. Built on .NET 10.
 
 ---
 
-## What's new in v3.1
+## Why FreeBird
 
-**Bundled FLAC binary support**:
-- Windows: when `flac.exe` is missing, FreeBird auto-downloads the official Xiph FLAC 1.5.0 release (~1.3 MB) from xiph.org and verifies it via pinned SHA-256.
-- macOS / Linux: if `flac` is missing, FreeBird prints a clear instruction to install via `brew install flac` (macOS) or `apt install flac` (Debian/Ubuntu) and continues with structural-only checks (L1) under `--integrity auto`.
-- New explicit subcommand: `fb install-flac` — useful for CI / sysadmin / pre-warming.
-- New advanced flags: `--flac-bin <path>`, `--no-auto-download` (the `--flac-url` flag is hidden/advanced; also honored via `FREEBIRD_FLAC_URL` and `FREEBIRD_NO_AUTO_DOWNLOAD` env vars).
+When NetEase Cloud Music caches a song on your device, it stores it as an opaque `.uc` / `.uc!` file that nothing else can play. FreeBird:
 
----
+- 🔓 **Decrypts** the cache file into a normal audio file
+- 🎵 **Names it properly** — `Artist - Title.flac` instead of `1303027499-_-_5999-_-_...uc!`
+- 🏷️  **Embeds metadata tags** (ARTIST, TITLE, ALBUM) fetched from NetEase
+- 🛡️ **Verifies the audio** is not corrupted (FLAC PCM-MD5 / structural check)
+- 📂 **Never touches your originals** — read-only on the cache directory
+- 🎯 **Just works** — single command, no GUI, no config file
 
-## What's new in v3
-
-v3 adds **NetEase API–driven naming** and **default-on tag-writing** (v3.3+; opt-out via `--no-write-tags`) to the decoder pipeline.
-
-### Filename rendering from real metadata
-
-When run online (the default), `fb` now queries the NetEase Cloud Music song-detail API
-for each decoded file and renames the output using a template. Out of the box:
-
-```
-3367798042.uc   →   <artist> - <title>.flac
-```
-
-The template is configurable via `--naming-template`. Recognised placeholders:
-`{artist}`, `{title}`, `{album}`, `{musicId}`. Templates may contain path separators
-(e.g. `"{album}/{title}"`) and will be sanitized for cross-platform filesystem safety.
-
-When the API call fails (offline, 5xx, timeout, deserialization error, or `--offline`),
-`fb` falls back to the musicId-based name:
-
-```
-3367798042.uc   →   3367798042.flac
-```
-
-and drops a `<finalname>.txt` sidecar next to it with `reason: <token>` so you can
-spot which files lost metadata. Tokens: `metadata-empty`, `metadata-fetch-failed`,
-`metadata-deserialize-failed`.
-
-### New CLI flags
-
-All five flags are available on both `fb scan` and `fb watch`:
-
-| Flag | Type | Default | Description |
-|---|---|---|---|
-| `--naming-template` | string | `"{artist} - {title}"` | Filename template using `{artist}` `{title}` `{album}` `{musicId}`. |
-| `--offline` | switch | `false` | Skip NetEase API; use musicId fallback naming. |
-| `--api-timeout` | int (seconds) | `10` | NetEase API request timeout (range 1–300). |
-| `--api-rate-limit` | int (req/sec) | `0` | Max NetEase API calls per second (0–100, 0 = unlimited). |
-| `--write-tags` | switch | **`true`** | Write metadata tags (ARTIST/TITLE/ALBUM) into decoded audio files. (v3.3+) |
-| `--no-write-tags` | switch | `false` | Disable tag writing (opt-out from default `--write-tags=true`). (v3.3+) |
-
-For exact descriptions and defaults, see `fb scan --help` / `fb watch --help`.
-
-### Tag-writing (on by default since v3.3)
-
-FreeBird embeds the resolved metadata into the decoded audio. Tag writing is
-**on by default** (`--write-tags`, since v3.3); pass `--no-write-tags` to disable.
-
-- **FLAC** — written via `metaflac` (install with `brew install flac` on macOS, `apt install flac` on Debian/Ubuntu). Existing tags like GENRE, DATE, TRACKNUMBER, REPLAYGAIN_*, COMMENT, ENCODER are **preserved** (only ARTIST/TITLE/ALBUM are replaced).
-- **MP3** — ID3v2.3 tags written natively (no external tool required).
-- **M4A** — iTunes-style atoms written natively.
-
-Tags written: ARTIST, TITLE, ALBUM. If metadata resolution falls back to musicId,
-no tags are written for that file (the sidecar still records the reason).
-
-If `metaflac` is missing (FLAC tag write only), tag write is silently skipped for
-FLAC files (recorded in sidecar as `tag-tool-missing`); audio output is unaffected.
-
-### Migration from v2 (3 steps)
-
-v3's online-by-default behaviour is a **BREAKING change** to filenames. Recommended
-migration path:
-
-1. **First v3 run — stay offline.** Use `fb scan ... --offline` to confirm v3 still
-   produces the v2-equivalent filenames (musicId-based) on your existing cache.
-2. **Drop `--offline`.** Re-run without the flag; new files are renamed from
-   metadata. Existing decoded files are skipped per `--collision` policy.
-3. **Tags now on by default (v3.3+).** Tag writing was opt-in in v3.0–v3.2, now
-   on by default. If you want to preserve v3.2-era behavior of not writing tags,
-   pass `--no-write-tags`. Re-decodes are NOT triggered automatically; you may
-   want to delete prior outputs and re-run if you want tags on previously-decoded files.
-
-### v3 edge cases worth knowing
-
-- **OA2 — re-decode after offline-only runs.** If you previously ran with
-  `--offline` and then run again WITHOUT `--offline`, the conservative collision
-  policy treats the existing musicId-named file as already-decoded; the new
-  metadata-named file will NOT be produced unless you use `--collision overwrite`
-  or delete the prior output. This is intentional — see CHANGELOG for rationale.
-- **OA1 — collisions.** When two different musicIds resolve to the same
-  `"<artist> - <title>"`, the second is suffixed with the musicId for
-  disambiguation (e.g. `"Foo - Bar [3367798042].flac"`).
+Run it once with `fb scan` to convert what you have today, or leave `fb watch` running to convert new songs as you listen.
 
 ---
 
-## Features
+## Quick start
 
-- **Scans a directory** for `.uc` (Windows) and `.uc!` (macOS) NetEase cache files.
-- **Decrypts** with the XOR-`0xA3` algorithm used by the NetEase Cloud Music client.
-- **Sniffs format** from magic bytes (MP3 ID3 / MP3 sync / FLAC `fLaC` / M4A `ftyp`).
-- **Verifies integrity** at one of four levels (`auto` / `l1` / `l3` / `off`).
-- **Atomic writes** via staging directory + rename — never leaves half-written files.
-- **Quarantines failures** to `.freebird-failed/` with a `.txt` sidecar capturing the reason.
-- **Skip-or-overwrite collision policy** for repeat runs.
-- **Concurrent** processing with configurable worker count.
-- **Metadata-aware naming** — renames output files from NetEase Cloud Music song-detail API; falls back to musicId on failure. ARTIST/TITLE/ALBUM tags are embedded by default (v3.3+; opt-out via `--no-write-tags`); existing unrelated tags (GENRE/DATE/etc) are preserved.
+After [installing](#install):
+
+```bash
+# Convert every cached song into ~/Music/decoded — runs once and exits
+fb scan ~/Library/Containers/com.netease.163music/Data/Caches/online_play_cache \
+        --output ~/Music/decoded
+
+# Or: keep watching the cache directory and auto-convert new songs
+fb watch ~/Library/Containers/com.netease.163music/Data/Caches/online_play_cache \
+         --output ~/Music/decoded
+```
+
+That's it. Open `~/Music/decoded` in your favourite player and enjoy.
 
 ---
 
 ## Install
 
+### Pre-built binaries (recommended)
+
+Download the latest binary for your OS from the [releases page](https://github.com/jwu-au/FreeBird/releases):
+
+- `freebird-X.Y.Z-osx-arm64.tar.gz` — macOS (Apple Silicon)
+- `freebird-X.Y.Z-linux-x64.tar.gz` — Linux
+- `freebird-X.Y.Z-win-x64.zip` — Windows
+
+Extract, optionally put `fb` somewhere on your `PATH`, done.
+
 ### Build from source
 
-```
-git clone <this repo>
+```bash
+git clone https://github.com/jwu-au/FreeBird.git
 cd FreeBird
 dotnet build -c Release
 ```
 
-The `fb` (Windows: `fb.exe`) binary will be at `src/FreeBird.Cli/bin/Release/net10.0/`.
+The `fb` (or `fb.exe`) binary lands in `src/FreeBird.Cli/bin/Release/net10.0/`.
 
-### `flac` binary dependency (v3.1)
+### Optional: `flac` binary
 
-FreeBird needs the official `flac` binary for L3 (PCM-MD5) integrity verification on FLAC files, and `metaflac` for FLAC tag writing.
+For the strongest integrity check on FLAC files (full PCM-MD5 verification) and FLAC tag-writing, FreeBird needs the official `flac` binary.
 
-| OS | How FreeBird finds `flac` |
+| OS | Install command |
 |---|---|
-| **Windows** | **Auto-download** on first need: official Xiph 1.5.0 release is fetched from xiph.org, SHA-verified, and extracted alongside `fb.exe`. No manual install. To opt out: `--no-auto-download` or set `FREEBIRD_NO_AUTO_DOWNLOAD=1`. To pre-warm in CI: `fb install-flac`. |
 | **macOS** | `brew install flac` |
 | **Linux (Debian/Ubuntu)** | `sudo apt install flac` |
 | **Linux (Fedora)** | `sudo dnf install flac` |
 | **Linux (Arch)** | `sudo pacman -S flac` |
-| **Docker** | `RUN apt install -y flac && rm -rf /var/lib/apt/lists/*` |
+| **Windows** | **Automatic** — FreeBird downloads the official Xiph release on first need, verifies its SHA, and places it next to `fb.exe`. No manual step. |
 
-Probe order (all platforms): `--flac-bin <path>` → `<fb dir>/flac{.exe}` → `flac` on PATH.
-
-Without `flac`:
-- `--integrity off` and `--integrity l1` work fine (no FLAC L3 features).
-- `--integrity auto` (default) gracefully degrades to L1 with a one-time warning.
-- `--integrity l3` exits 2 with an install hint.
-
-Without `metaflac` (FLAC tag writing): tag write is silently skipped for FLAC files (recorded in sidecar as `tag-tool-missing`), audio output is unaffected.
+If you skip this step on macOS/Linux, FreeBird still works — it gracefully degrades to a lighter structural integrity check and silently skips FLAC tag-writing. MP3 / M4A are unaffected.
 
 ---
 
 ## Usage
 
+### `fb scan` — one-time conversion
+
 ```
 fb scan <input-dirs>... --output <output-dir> [options]
 ```
 
-`<input-dirs>` accepts one or more directories (v3.4+). For a single directory the
-syntax is unchanged from v3.0–v3.3.
-
-### Example
+#### Examples
 
 ```bash
-# macOS — decode cached songs into ~/Music/decoded
+# macOS
 fb scan "~/Library/Containers/com.netease.163music/Data/Caches/online_play_cache" \
         --output ~/Music/decoded
 ```
 
 ```powershell
-# Windows — decode cached songs into D:\Music\decoded
+# Windows
 fb.exe scan "C:\Users\you\AppData\Local\Netease\CloudMusic\Cache\Cache" `
             --output D:\Music\decoded
 ```
 
-### Options
+#### Options
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-o, --output <dir>` | required | Output directory for decoded files. Created if missing. |
 | `--integrity <level>` | `auto` | One of `auto` / `l1` / `l3` / `off`. See [Integrity levels](#integrity-levels). |
-| `--concurrency <n>` | `4` | Max files processed in parallel across ALL inputs. |
-| `--api-concurrency <n>` | `4` | Max in-flight NetEase API requests (1–16). Global across all inputs. (v3.4+) |
-| `--api-rate-limit <n>` | `0` | Max NetEase API calls/sec (0 = unlimited). Now actually enforced. (v3.4 fix) |
-| `--on-collision <policy>` | `skip` | `skip` or `overwrite` when the output file already exists. |
+| `--concurrency <n>` | `4` | Max files processed in parallel across all inputs. |
+| `--api-concurrency <n>` | `4` | Max in-flight NetEase API requests (1–16). Global across all inputs. |
+| `--api-rate-limit <n>` | `0` | Max NetEase API calls/sec (0 = unlimited). |
+| `--on-collision <policy>` | `skip` | `skip` or `overwrite` when an output file already exists. |
+| `--no-write-tags` | `false` | Disable embedding ARTIST/TITLE/ALBUM tags. |
 | `-v, --verbose` | `false` | Debug-level logging. |
 | `-q, --quiet` | `false` | Warning-level only. Mutually exclusive with `--verbose`. |
 
-Get inline help:
+### `fb watch` — continuous monitoring
 
-```bash
-fb --help
-fb scan --help
-fb watch --help
-```
-
-### Advanced flags (all subcommands, v3.1+)
-
-| Flag | Env var | Default | Purpose |
-|---|---|---|---|
-| `--flac-bin <path>` | — | (auto-probe) | Force a specific `flac` binary location, skipping the probe chain. |
-| `--no-auto-download` | `FREEBIRD_NO_AUTO_DOWNLOAD=1` | off | Disable the Windows auto-download. Equivalent to having no `flac` on PATH. |
-| `--flac-url <url>` | `FREEBIRD_FLAC_URL` | pinned Xiph 1.5.0 | (hidden) Override download source. For air-gapped networks or alternative mirrors. Used by `fb install-flac` and the auto-install path on Windows. |
-
-### `fb install-flac` (Windows only — pre-warm the flac binary)
-
-Explicitly trigger the Windows auto-download outside of a scan/watch cycle. Useful for:
-- CI: install flac before the first scan to avoid first-run race.
-- Sysadmin: install to a custom directory.
-- Troubleshooting: re-install after corruption.
-
-```
-fb install-flac
-fb install-flac --target C:\tools\flac
-fb install-flac --target /opt/flac --url https://your-mirror.example/flac.zip
-```
-
-On macOS / Linux: prints a polite message pointing at the OS package manager (brew/apt) and exits 0.
-
----
-
-## `fb watch`
-
-Watch one or more input directories for new/changed `.uc` files and decode them as they stabilize. Runs until Ctrl-C.
+Watch one or more input directories and decode new/changed files as they stabilise. Runs until you press Ctrl-C.
 
 ```
 fb watch <input-dirs>... --output <output-dir> [options]
 ```
 
-`<input-dirs>` accepts one or more directories (v3.4+); see
-[Multi-input scan and watch](#multi-input-scan-and-watch-new-in-v34).
-
-### Example
+#### Example
 
 ```bash
-fb watch ~/Library/Caches/com.netease.163music/Caches -o ~/Music/Decoded
+fb watch ~/Library/Containers/com.netease.163music/Data/Caches/online_play_cache \
+         --output ~/Music/decoded
 ```
 
-### Options
+#### Options
+
+All `fb scan` options plus:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-o, --output <dir>` | required | Output directory for decoded files. Created if missing. |
-| `--integrity <level>` | `auto` | One of `auto` / `l1` / `l3` / `off`. See [Integrity levels](#integrity-levels). |
-| `--concurrency <n>` | `4` | Max files processed in parallel across ALL inputs (1-32). |
-| `--api-concurrency <n>` | `4` | Max in-flight NetEase API requests (1–16). Global across all inputs. (v3.4+) |
-| `--api-rate-limit <n>` | `0` | Max NetEase API calls/sec (0 = unlimited). Now actually enforced. (v3.4 fix) |
-| `--on-collision <policy>` | `skip` | `skip` or `overwrite` when the output file already exists. |
 | `--poll-interval <Ns\|Nm>` | `5s` | How often to poll the input directory. Range `1s`..`60m`. |
 | `--stability-checks <n>` | `2` | Consecutive equal-size polls required before treating a file as complete (1-10). |
 | `--min-file-size <bytes>` | `1024` | Skip files smaller than N bytes. |
 | `--skip-initial-scan` | `false` | Skip the initial pass over existing files; only process files that appear after startup. |
 | `--log-file <path>` | `<output>/.freebird/logs/watch-YYYY-MM-DD.log` | Path to the rolling watch log file. |
 | `--no-log-file` | `false` | Disable the rolling watch log file. Mutually exclusive with `--log-file`. |
-| `-v, --verbose` | `false` | Debug-level logging. |
-| `-q, --quiet` | `false` | Warning-level only. Mutually exclusive with `--verbose`. |
 
-### Re-decoding files
+#### Re-decoding files
 
-There is no separate "retry" command. To re-process a file, delete the corresponding output:
+There is no separate "retry" command. Just delete the output:
 
 ```bash
 # Re-decode a successfully processed file
-rm output/foo.flac
+rm ~/Music/decoded/"Artist - Title.flac"
 
 # Retry a quarantined failure
-rm output/.freebird-failed/foo.flac.txt
+rm ~/Music/decoded/.freebird-failed/foo.flac.txt
 ```
 
 The next poll cycle will see the missing output and decode the source again.
 
-### Log file
+#### Log file
 
 By default `fb watch` writes a rolling log to:
 
@@ -295,78 +167,67 @@ By default `fb watch` writes a rolling log to:
 <output>/.freebird/logs/watch-YYYY-MM-DD.log
 ```
 
-- Rolls daily.
-- 14-day retention (older files are deleted automatically).
+- Rolls daily, 14-day retention (older files deleted automatically).
 - Override the path with `--log-file <path>`.
 - Disable file logging entirely with `--no-log-file` (console output is unaffected).
 
-### Exit codes
+### Advanced flags
 
-Same mapping as `fb scan` — see [Exit codes](#exit-codes). Ctrl-C / SIGTERM exits with code `130`.
+| Flag | Env var | Default | Purpose |
+|---|---|---|---|
+| `--flac-bin <path>` | — | (auto-probe) | Force a specific `flac` binary location. |
+| `--no-auto-download` | `FREEBIRD_NO_AUTO_DOWNLOAD=1` | off | Disable Windows auto-download of the `flac` binary. |
+| `--flac-url <url>` | `FREEBIRD_FLAC_URL` | pinned Xiph 1.5.0 | Override download source. For air-gapped networks or alternative mirrors. |
+
+### `fb install-flac` (Windows only)
+
+Pre-warm the `flac` auto-download outside of a scan/watch cycle — handy for CI or scripted installs.
+
+```
+fb install-flac
+fb install-flac --target C:\tools\flac
+fb install-flac --target /opt/flac --url https://your-mirror.example/flac.zip
+```
+
+On macOS/Linux it prints a friendly hint to use your package manager and exits.
 
 ---
 
-## Multi-input scan and watch (new in v3.4)
+## Multiple input directories
 
-Both `fb scan` and `fb watch` accept one or more input directories. Files from all
-directories are processed into a single shared output directory (flat layout).
+Both `fb scan` and `fb watch` accept one or more input directories. Decoded files are placed into a single shared output (flat layout).
 
 ```bash
-# Process two NetEase cache directories at once
+# Process two cache directories at once
 fb scan ~/cache1 ~/cache2 --output ~/music
 
-# Watch multiple cache directories continuously
+# Watch three cache directories continuously
 fb watch ~/cache1 ~/cache2 ~/cache3 --output ~/music
 ```
 
-### Concurrency & rate-limiting (also new in v3.4)
+### What happens in edge cases
 
-- `--concurrency N` (default 4) — max files processed in parallel across ALL inputs
-- `--api-concurrency N` (default 4, max 16) — max in-flight NetEase API requests
-- `--api-rate-limit N` (req/sec) — NOW ACTUALLY ENFORCED (was a silent no-op in v3.0–v3.3)
-
-When running multiple input dirs, the API rate limiter and concurrency cap are
-global across all inputs — protecting NetEase from overload.
-
-### Same musicId across inputs
-
-If the same musicId appears in multiple input dirs (e.g., cached at different
-bitrates), the first one to finish wins. An internal output-mutex pool serializes
-writes per output path, preventing race conditions.
-
-### Failure isolation
-
-- `fb scan` fails-fast if any input directory doesn't exist.
-- `fb watch` tolerates missing inputs (logs `WARN`, watches the valid ones).
-- A vanished input dir during watch → its task auto-demotes to `DEAD`; the
-  `HealthProbe` resurrects it when the directory reappears (5-minute interval).
-
-### Behavior matrix
-
-| Scenario | Behavior |
+| Scenario | Behaviour |
 |---|---|
 | `fb scan dir1 dir2` (both valid) | Both processed concurrently into shared output. |
 | `fb scan dir1 missing` | Fails fast with non-zero exit; no work done. |
-| `fb watch dir1 missing dir3` | Watches `dir1` + `dir3`; logs `WARN` for `missing`; `HealthProbe` keeps trying. |
-| `dir1` deleted mid-watch | Its `WatchTask` goes `Active → Dead`; other tasks unaffected. |
-| `dir1` reappears | `HealthProbe` flips it `Dead → Resurrecting → Active`. |
-| Same musicId in `dir1` + `dir2` | First writer wins; output-mutex serializes the contended write. |
+| `fb watch dir1 missing dir3` | Watches `dir1` + `dir3`; warns about `missing`; auto-retries it. |
+| `dir1` deleted mid-watch | Its task pauses; other tasks unaffected. |
+| `dir1` reappears | Auto-resumed within 5 minutes. |
+| Same song cached in `dir1` + `dir2` | First writer wins; internal mutex prevents file races. |
 | Ctrl-C / SIGTERM | All watch tasks drain gracefully; exit `130`. |
 
-### Log enrichment
-
-Per-task log messages are prefixed with `[watch=<basename>]` so you can tell
-which input directory produced each event.
+Each per-task log line is prefixed with `[watch=<basename>]` so you can tell which input directory produced each event.
 
 ---
 
 ## Integrity levels
 
-| Level | What it does | When to use |
-|-------|-------------|-------------|
-| `off` | No verification. Fastest. | You trust your inputs and want raw decryption speed. |
+| Level | What it checks | When to use |
+|-------|----------------|-------------|
+| `off` | No verification. Fastest. | You trust your inputs and want raw speed. |
 | `l1`  | Structural check via TagLib# (header parse + duration > 0). Works for MP3, FLAC, M4A. | Default light check. |
-| `l3`  | Full FLAC PCM-MD5 verification via external `flac -t`. **FLAC only.** Falls back to `l1` for MP3 / M4A. | Maximum confidence for FLAC. Requires `flac` binary. |
+| `l3`  | Full FLAC PCM-MD5 verification via external `flac -t`. **FLAC only** — falls back to `l1` for MP3 / M4A. | Maximum confidence for FLAC. Requires `flac` binary. |
 | `auto` *(default)* | Probes `flac` at startup. Uses `l3` for FLAC if available, else `l1`. Always uses `l1` for MP3 / M4A. | Recommended for most users. |
 
 If you use `--integrity l3` without `flac` on `PATH`, FreeBird exits with code `2` and a clear error message — it will not silently downgrade.
@@ -377,15 +238,20 @@ If you use `--integrity l3` without `flac` on `PATH`, FreeBird exits with code `
 
 ```
 <output-dir>/
-├── 12345-abc.mp3            ← successfully decoded files
-├── 67890-def.flac
-├── .freebird-staging/       ← temporary; auto-cleaned on success
-└── .freebird-failed/        ← quarantined files
-    ├── bad-song.flac
-    └── bad-song.flac.txt    ← sidecar with failure reason
+├── Artist - Title.flac            ← successfully decoded files
+├── Another Artist - Song.mp3
+├── .freebird-staging/             ← temporary; auto-cleaned on success
+├── .freebird-failed/              ← quarantined files
+│   ├── bad-song.flac
+│   └── bad-song.flac.txt          ← sidecar with failure reason
+└── .freebird/
+    └── logs/
+        └── watch-YYYY-MM-DD.log   ← watch mode log file
 ```
 
 ### Sidecar format
+
+When integrity verification fails, FreeBird writes a small text file alongside the quarantined output:
 
 ```
 timestamp: 2026-06-08T22:14:02.0870900Z
@@ -402,9 +268,9 @@ reason:    flac -t failed: ... FRAME_CRC_MISMATCH after processing 53000 samples
 | Code | Meaning |
 |------|---------|
 | `0`  | All files decoded successfully (or input was empty). |
-| `1`  | One or more files failed integrity check, had unknown format, or threw an error. |
+| `1`  | One or more files failed integrity, had unknown format, or threw an error. |
 | `2`  | Bad arguments (missing input dir, `--integrity l3` without `flac`, `--verbose` + `--quiet`, etc.). |
-| `130`| Cancelled via Ctrl-C. |
+| `130`| Cancelled via Ctrl-C / SIGTERM. |
 
 ---
 
@@ -413,45 +279,57 @@ reason:    flac -t failed: ... FRAME_CRC_MISMATCH after processing 53000 samples
 For each `.uc` / `.uc!` file in the input directory:
 
 1. **Decrypt** every byte with `XOR 0xA3` (streamed, low memory).
-2. **Sniff** the first 12 bytes to identify MP3 / FLAC / M4A. Unknown → quarantine.
+2. **Sniff** the first 12 bytes to identify MP3 / FLAC / M4A. Unknown format → quarantine.
 3. **Atomically write** to `.freebird-staging/<guid>.<ext>`.
-4. **Verify integrity** at the selected level.
-5. If passed → atomic rename to `<output>/<stem>.<ext>`.
-6. If failed → move to `.freebird-failed/` with a `.txt` sidecar.
+4. **Fetch metadata** from NetEase Cloud Music song-detail API to build the filename.
+5. **Verify integrity** at the selected level.
+6. If passed → atomic rename to `<output>/<Artist - Title>.<ext>`, then embed tags.
+7. If failed → move to `.freebird-failed/` with a `.txt` sidecar capturing the reason.
 
-No files in the input directory are ever modified or deleted.
+Your input directory is never modified or deleted.
 
 ---
 
-## Limitations
+## Tips
 
-- **`flac` binary must be on `PATH`** for L3 — no config-file override yet.
-- **No recursive directory scan** — input directory is scanned non-recursively.
-- Windows auto-download requires write access to the `fb.exe` directory (typically true for user installs; system-wide installs to `Program Files` require admin or `--no-auto-download`).
-- Auto-download URL and SHA are pinned to Xiph FLAC 1.5.0. Newer FLAC versions on PATH still work; the auto-download is just for the bundled-fallback case.
-- `fb install-flac` on macOS/Linux only prints package-manager hints (no auto-install) to respect upstream maintainer-managed installs.
-- **Upgrading from v3.0.x or v3.1.x**: If `.freebird-failed/` contains old sidecars from previous versions, they will be silently ignored (no crash). To regenerate them with the new stem-based naming, optionally run `rm -rf .freebird-failed/` once after upgrading.
+- **No recursive scan** — only files directly in the input directory are processed. Pass each subdirectory you care about as a separate input argument.
+- **Multi-byte CJK / Unicode** is fully supported in song names and artist names.
+- **Multiple artists** in a song are joined with ` & ` in the filename and embedded as separate tag values.
+- **Read-only on inputs** — FreeBird never modifies or deletes the source `.uc` files.
+
+---
+
+## Troubleshooting
+
+| Problem | Try this |
+|---|---|
+| "flac binary not found" on Linux | `sudo apt install flac` (or your distro equivalent) |
+| Windows auto-download fails | Check network access to `xiph.org`; or pass `--flac-bin C:\path\to\flac.exe` manually |
+| Output files all named `<musicId>.flac` | NetEase API didn't respond (network issue). Re-run later. |
+| Quarantine has files but I don't know why | `cat <output>/.freebird-failed/*.txt` — sidecars explain each failure |
+| Watch mode keeps retrying a failed file | A quarantine sidecar exists. Delete it to retry: `rm <output>/.freebird-failed/foo.flac.txt` |
 
 ---
 
 ## Development
 
 ```bash
-dotnet test                # 378 tests, all passing
-dotnet build               # 0 warnings, 0 errors
-dotnet run --project src/FreeBird.Cli -- scan ./test-in --output ./test-out
+dotnet test     # runs the full test suite
+dotnet build    # 0 warnings, 0 errors
 ```
 
 ### Project layout
 
 | Project | Purpose |
 |---------|---------|
-| `src/FreeBird.Core` | XOR decoder, format sniffer, integrity checkers, file processor, orchestrator |
+| `src/FreeBird.Core` | XOR decoder, format sniffer, integrity checkers, file processor, watch supervisor |
 | `src/FreeBird.Cli` | `Program.cs` entry, System.CommandLine wiring, Autofac container, Serilog logger |
 | `src/FreeBird.Core.Tests` | Unit + small-integration tests for Core |
-| `src/FreeBird.Cli.Tests` | End-to-end tests through `ScanRunner` with real fixtures |
+| `src/FreeBird.Cli.Tests` | End-to-end tests through `ScanRunner` / `WatchRunner` with real fixtures |
 
-DI is wired via [Autofac](https://autofac.org/) using an `IDependency` marker-interface convention. Logging is [Serilog](https://serilog.net/) to the console.
+DI is wired via [Autofac](https://autofac.org/) using an `IDependency` marker-interface convention. Logging is [Serilog](https://serilog.net/) to console (and rolling file for watch mode).
+
+For release history and migration notes, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -461,4 +339,4 @@ TBD.
 
 ### FLAC licensing acknowledgment
 
-When used on Windows, FreeBird auto-downloads the Xiph FLAC binary (`flac.exe`, `metaflac.exe`, `libFLAC.dll`, `libFLAC++.dll`) from xiph.org. These binaries are distributed by Xiph.Org Foundation under their own license terms (the FLAC source license is BSD-style for libFLAC and GPL v2 for the `flac` / `metaflac` command-line tools). FreeBird only invokes them as separate processes (no static linking) and ships no FLAC source code or binaries in this repository. Users redistributing FreeBird should be aware of Xiph's licensing terms if they bundle the downloaded binaries: https://xiph.org/flac/license.html
+On Windows, FreeBird auto-downloads the Xiph FLAC binaries (`flac.exe`, `metaflac.exe`, `libFLAC.dll`, `libFLAC++.dll`) from xiph.org. These are distributed by the Xiph.Org Foundation under their own license terms: libFLAC is BSD-style, the command-line tools are GPL v2. FreeBird only invokes them as separate processes (no static linking) and ships no FLAC source code or binaries in this repository. If you redistribute FreeBird with the downloaded binaries bundled, please be aware of Xiph's licensing terms: https://xiph.org/flac/license.html
