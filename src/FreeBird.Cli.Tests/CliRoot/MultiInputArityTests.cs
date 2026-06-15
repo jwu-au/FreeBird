@@ -13,7 +13,7 @@ namespace FreeBird.Cli.Tests.CliRootTests;
 /// <see cref="System.CommandLine.ArgumentArity.OneOrMore"/>). Single-input
 /// invocation must remain backward compatible.
 /// </summary>
-[Collection("RunnerOverride")]
+[Collection("GlobalStaticState")]
 public class MultiInputArityTests : IDisposable
 {
     private readonly string _tempDir;

@@ -20,7 +20,7 @@ namespace FreeBird.Cli.Tests;
 /// Uses <see cref="WatchRunner.OrchestratorFactoryOverride"/> so the underlying watch
 /// loop is mocked — these tests exercise the supervisor/runner wiring only.
 /// </summary>
-[Collection("RunnerOverride")]
+[Collection("GlobalStaticState")]
 public class WatchRunnerMultiInputTests : IDisposable
 {
     private readonly string _tempDir;

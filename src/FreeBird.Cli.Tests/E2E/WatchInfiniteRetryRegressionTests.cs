@@ -33,7 +33,7 @@ namespace FreeBird.Cli.Tests.E2E;
 ///
 /// Marked Category=E2E — see <see cref="WatchE2EHelpers"/> for rationale (wall-clock slow).
 /// </summary>
-[Collection("RunnerOverride")]
+[Collection("GlobalStaticState")]
 public class WatchInfiniteRetryRegressionTests : IDisposable
 {
     private readonly string _tempDir;

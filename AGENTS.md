@@ -95,9 +95,9 @@ If a test never shows RED, it isn't real TDD coverage — temporarily revert the
 
 ### Static fields are test-pollution landmines
 
-`ScanRunner.RunnerOverride`, `WatchRunner.OrchestratorFactoryOverride`, `WatchRunner.CoordinatorFactoryOverride`, `WatchCommand.HandlerOverride` are all `public static` fields used as test hooks. xUnit runs different test classes in parallel by default → state leaks across classes.
+`ScanRunner.RunnerOverride`, `WatchRunner.OrchestratorFactoryOverride`, `WatchRunner.CoordinatorFactoryOverride`, `WatchCommand.HandlerOverride`, `InstallFlacRunner.ContainerOverride` are all `public static` fields used as test hooks. xUnit runs different test classes in parallel by default → state leaks across classes.
 
-**Rule**: any test class that mutates one of these MUST carry `[Collection("RunnerOverride")]` (definition in `src/FreeBird.Cli.Tests/RunnerOverrideCollection.cs`). If you add a new static test hook, add a matching `[Collection]` definition and tag every caller.
+**Rule**: any test class that mutates one of these MUST carry `[Collection("GlobalStaticState")]` (definition in `src/FreeBird.Cli.Tests/GlobalStaticStateCollection.cs`). If you add a new static test hook, add it to that collection's doc and tag every caller.
 
 ### macOS vs Linux test scheduling differs
 

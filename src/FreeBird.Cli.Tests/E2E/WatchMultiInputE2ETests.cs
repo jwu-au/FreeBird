@@ -26,7 +26,7 @@ namespace FreeBird.Cli.Tests.E2E;
 /// fixture, kick off the runner with a short poll interval, poll for the expected
 /// output, then cancel.
 /// </summary>
-[Collection("RunnerOverride")]
+[Collection("GlobalStaticState")]
 public class WatchMultiInputE2ETests : IDisposable
 {
     private readonly string _tempDir;

@@ -20,7 +20,7 @@ namespace FreeBird.Cli.Tests.E2E;
 /// Marked <c>Category=E2E</c> because it drives the real orchestrator and is wall-clock
 /// slow. Use <c>dotnet test --filter "Category!=E2E"</c> for fast inner-loop runs.
 /// </summary>
-[Collection("RunnerOverride")]
+[Collection("GlobalStaticState")]
 public class InitialSweepE2ETests : IDisposable
 {
     private readonly string _tempDir;

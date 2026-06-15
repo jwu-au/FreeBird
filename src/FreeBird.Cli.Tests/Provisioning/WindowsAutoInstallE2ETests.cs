@@ -32,6 +32,7 @@ namespace FreeBird.Cli.Tests.Provisioning;
 /// Core.Tests' existing seam pattern: tests construct a fixture ZIP locally, compute
 /// its SHA, override the static property, and restore it after.
 /// </remarks>
+[Collection("GlobalStaticState")]
 public class WindowsAutoInstallE2ETests : IDisposable
 {
     private readonly string _tempDir;

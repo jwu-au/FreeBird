@@ -10,9 +10,10 @@ namespace FreeBird.Cli.Tests;
 ///   <item><c>WatchCommand.HandlerOverride</c></item>
 ///   <item><c>WatchRunner.OrchestratorFactoryOverride</c></item>
 ///   <item><c>WatchRunner.CoordinatorFactoryOverride</c></item>
+///   <item><c>InstallFlacRunner.ContainerOverride</c></item>
 /// </list>
-/// Without this collection, ubuntu CI runs parallel test classes and leaks
-/// captured state across class boundaries (v3.4.1 hotfix).
+/// Without this collection, ubuntu and Windows CI run parallel test classes
+/// and leak captured state across class boundaries.
 /// </summary>
-[CollectionDefinition("RunnerOverride")]
-public sealed class RunnerOverrideCollection { }
+[CollectionDefinition("GlobalStaticState")]
+public sealed class GlobalStaticStateCollection { }

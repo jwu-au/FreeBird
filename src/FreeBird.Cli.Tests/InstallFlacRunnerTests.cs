@@ -16,7 +16,7 @@ namespace FreeBird.Cli.Tests;
 /// Shares <c>ConsoleRedirect</c> collection with other runner tests to prevent
 /// races on <c>Console.Out</c>.
 /// </summary>
-[Collection("ConsoleRedirect")]
+[Collection("GlobalStaticState")]
 public class InstallFlacRunnerTests : IDisposable
 {
     public void Dispose() => InstallFlacRunner.ContainerOverride = null;

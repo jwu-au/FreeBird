@@ -11,7 +11,7 @@ namespace FreeBird.Cli.Tests;
 /// T19: end-to-end test that the CLI handles an empty input directory gracefully.
 /// Exercises Program → ScanRunner → ScanOrchestrator → FileProcessor (none invoked) → ScanSummary.
 /// </summary>
-[Collection("RunnerOverride")]
+[Collection("GlobalStaticState")]
 public class ScanRunnerEmptyDirTests : IDisposable
 {
     private readonly string _tempDir;

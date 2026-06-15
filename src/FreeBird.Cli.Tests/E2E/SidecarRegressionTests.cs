@@ -38,7 +38,7 @@ namespace FreeBird.Cli.Tests.E2E;
 /// If either assertion breaks, v3.2.0 watch-skip is broken and `SourceUnchangedSinceFailure`
 /// will not match → infinite quarantine churn returns.
 /// </summary>
-[Collection("RunnerOverride")]
+[Collection("GlobalStaticState")]
 public class SidecarRegressionTests : IDisposable
 {
     private readonly string _tempDir;
