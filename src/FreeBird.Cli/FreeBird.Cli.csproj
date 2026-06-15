@@ -13,6 +13,22 @@
     <PackageReference Include="System.CommandLine" Version="3.0.0-preview.4.26230.115" />
   </ItemGroup>
 
+  <!--
+    T01 (v3.5 Windows Service): Windows-only NuGets for SCM hosting + Event Log.
+    Conditioned on $([MSBuild]::IsOSPlatform('Windows')) so `dotnet restore` on
+    macOS / Linux does not pull these in. Production Windows Service code paths
+    must therefore guard with OperatingSystem.IsWindows() before referencing.
+
+    Pinned to .NET 10 minor (matches the project TFM) per design §10 risk row.
+    Per M-3 fix: WMI / management NuGet is intentionally NOT added — T12 obtains
+    service start time via Process.GetProcessById(...).StartTime instead.
+  -->
+  <ItemGroup Condition="'$([MSBuild]::IsOSPlatform(`Windows`))' == 'true'">
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.9" />
+    <PackageReference Include="Serilog.Sinks.EventLog" Version="4.0.0" />
+    <PackageReference Include="System.ServiceProcess.ServiceController" Version="10.0.9" />
+  </ItemGroup>
+
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
