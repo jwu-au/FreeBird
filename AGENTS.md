@@ -132,7 +132,7 @@ The path inside the official Xiph ZIP starts with `flac-1.5.0-win/Win64/...` —
 
 ## 8. Don't do these things
 
-- ❌ **Don't add a config file format** (YAML / JSON / TOML / INI). Use CLI flags + env vars.
+- ⚠️ **Prefer CLI flags + env vars for `fb scan` and `fb watch`.** A config file may be appropriate for service-mode installation (`fb service`) where the same long argument list is invoked at every boot and stored externally — that is an accepted exception, not a license to add JSON/YAML to the scan/watch commands.
 - ❌ **Don't introduce a third-party FLAC decoding library.** Use the official `flac` subprocess.
 - ❌ **Don't bundle FLAC binaries in this repo.** They're downloaded at runtime from xiph.org (Windows) or installed by the user (macOS/Linux).
 - ❌ **Don't modify input files.** FreeBird is read-only on inputs.
