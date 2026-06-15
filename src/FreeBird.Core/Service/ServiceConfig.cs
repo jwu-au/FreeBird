@@ -51,7 +51,7 @@ public sealed record WatchConfig
     public IntegrityChoice Integrity { get; init; } = IntegrityChoice.Auto;
     public int Concurrency { get; init; } = 4;
     public int ApiConcurrency { get; init; } = 4;
-    public string PollInterval { get; init; } = "10s";
+    public int PollIntervalSeconds { get; init; } = 5;  // design default
     public int StabilityChecks { get; init; } = 2;
     public long MinFileSize { get; init; } = 1024;
     public bool WriteTags { get; init; } = true;

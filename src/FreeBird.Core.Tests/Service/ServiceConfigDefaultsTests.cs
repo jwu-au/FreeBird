@@ -97,7 +97,7 @@ public class ServiceConfigDefaultsTests
         watch.Integrity.Should().Be(IntegrityChoice.Auto);
         watch.Concurrency.Should().Be(4);
         watch.ApiConcurrency.Should().Be(4);
-        watch.PollInterval.Should().Be("10s");
+        watch.PollIntervalSeconds.Should().Be(5);
         watch.StabilityChecks.Should().Be(2);
         watch.MinFileSize.Should().Be(1024);
         watch.WriteTags.Should().BeTrue();
