@@ -26,6 +26,17 @@
     <ProjectReference Include="..\FreeBird.Cli\FreeBird.Cli.csproj" />
   </ItemGroup>
 
+  <!--
+    T11 (v3.5 Windows Service): the Windows-only Event Log test references
+    System.Diagnostics.EventLog (whose NuGet is restored on Windows only — T01)
+    and the WindowsEventLogWriter type (itself excluded from the non-Windows
+    compile set). Exclude the test file on macOS/Linux so the suite builds
+    warning-free; on Windows CI it compiles and runs.
+  -->
+  <ItemGroup Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
+    <Compile Remove="Service/WindowsEventLogWriterTests.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <Content Include="..\FreeBird.Core.Tests\Fixtures\sample.mp3">
       <Link>Fixtures\sample.mp3</Link>

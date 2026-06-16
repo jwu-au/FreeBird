@@ -29,6 +29,17 @@
     <PackageReference Include="System.ServiceProcess.ServiceController" Version="10.0.9" />
   </ItemGroup>
 
+  <!--
+    T11 (v3.5 Windows Service): WindowsEventLogWriter references
+    System.Diagnostics.EventLog, whose NuGet is restored on Windows only (above).
+    Exclude the source file on macOS/Linux so the assembly builds warning-free —
+    the DI binding (T14) selects NotSupportedEventLogWriter on non-Windows hosts,
+    so nothing references the WindowsEventLogWriter type there.
+  -->
+  <ItemGroup Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
+    <Compile Remove="Service/WindowsEventLogWriter.cs" />
+  </ItemGroup>
+
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
