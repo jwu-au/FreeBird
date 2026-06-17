@@ -1,7 +1,15 @@
+using System;
 using System.Collections.Generic;
 using System.CommandLine;
+using System.IO;
+using System.IO.Abstractions;
 using System.Threading.Tasks;
+using Autofac;
+using FreeBird.Cli.Commands.Service;
+using FreeBird.Cli.Service;
 using FreeBird.Core.Models;
+using FreeBird.Core.Service;
+using Serilog;
 
 namespace FreeBird.Cli;
 
@@ -162,13 +170,294 @@ public static class CliRoot
                 ct);
         });
 
+        // T22 (v3.5): wire the `service` command tree inline, mirroring the scan/watch/install-flac
+        // precedent above. Seven visible leaves + one hidden `run` (the SCM entrypoint). Every
+        // leaf's SetAction does the non-Windows short-circuit FIRST (ShortCircuitNonWindows) before
+        // building any container or touching Windows-only resolution, so macOS / Linux get the
+        // friendly Windows-only message instead of a NotSupported* throw.
+        var serviceCommand = BuildServiceCommand();
+
         var root = new RootCommand("FreeBird — NetEase Music cache decoder")
         {
             scanCommand,
             WatchCommand.Build(),
             InstallFlacCommand.Build(),
+            serviceCommand,
         };
 
         return root;
+    }
+
+    /// <summary>
+    /// The friendly message shown when any <c>fb service</c> leaf is invoked on a non-Windows host.
+    /// Kept in sync with <see cref="RunCommand"/>'s internal copy.
+    /// </summary>
+    private const string ServiceWindowsOnlyMessage =
+        "ERROR: 'fb service' is Windows-only. See README §Service for launchd / systemd snippets.";
+
+    /// <summary>Default SCM short name used by start/stop/restart/status/uninstall.</summary>
+    private const string DefaultServiceName = "FreeBird";
+
+    /// <summary>
+    /// Writes the Windows-only message to stderr and returns true when running off-Windows, so each
+    /// leaf can short-circuit as its FIRST action with <c>if (ShortCircuitNonWindows()) return 1;</c>.
+    /// </summary>
+    private static bool ShortCircuitNonWindows()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Console.Error.WriteLine(ServiceWindowsOnlyMessage);
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Builds a console-sink Serilog logger for the service leaves' container/config needs. The
+    /// hosted-run path (RunCommand) builds its own file + EventLog logger instead.
+    /// </summary>
+    private static Serilog.ILogger BuildServiceLeafLogger() =>
+        new Serilog.LoggerConfiguration().WriteTo.Console().CreateLogger();
+
+    /// <summary>
+    /// Builds the <c>service</c> root and its eight children inline (additive to <see cref="Build"/>).
+    /// Children are added via <see cref="System.CommandLine.Command.Subcommands"/>; <c>run</c> is
+    /// marked Hidden so it stays reachable (<c>fb service run --help</c>) without appearing in help.
+    /// </summary>
+    private static Command BuildServiceCommand()
+    {
+        // --- shared options (each leaf takes only the ones it needs) ---
+        var configOpt = new Option<string>("--config")
+        {
+            Description = "Path to the service config JSON. Defaults to %ProgramData%\\FreeBird\\config.json.",
+            DefaultValueFactory = _ => ConfigDefaults.DefaultConfigPath,
+        };
+        var nameOpt = new Option<string>("--name")
+        {
+            Description = "SCM service short name.",
+            DefaultValueFactory = _ => DefaultServiceName,
+        };
+        var serviceAccountOpt = new Option<string?>("--service-account")
+        {
+            Description = "Windows account to run the service as (default: LocalSystem).",
+        };
+        var servicePasswordOpt = new Option<string?>("--service-password")
+        {
+            Description = "Password for --service-account (prompted / FB_SERVICE_PASSWORD if omitted).",
+        };
+        var yesOpt = new Option<bool>("--yes", "-y")
+        {
+            Description = "Skip the uninstall confirmation prompt.",
+        };
+        var timeoutOpt = new Option<int>("--timeout")
+        {
+            Description = "Seconds to wait for the SCM start/stop transition.",
+            DefaultValueFactory = _ => 30,
+        };
+        var outputOpt = new Option<string?>("--output")
+        {
+            Description = "Path to write the config file to (init). Defaults to %ProgramData%\\FreeBird\\config.json.",
+        };
+        var forceOpt = new Option<bool>("--force")
+        {
+            Description = "Overwrite an existing config file (init).",
+        };
+
+        // --- init ---
+        var initCmd = new Command("init", "Write a default FreeBird service config file.")
+        {
+            outputOpt, forceOpt,
+        };
+        initCmd.SetAction(parseResult =>
+        {
+            if (ShortCircuitNonWindows())
+            {
+                return 1;
+            }
+            return InitCommand.Handle(
+                parseResult.GetValue(outputOpt),
+                parseResult.GetValue(forceOpt),
+                new FileSystem(),
+                Console.Out,
+                Console.Error);
+        });
+
+        // --- install ---
+        var installCmd = new Command("install", "Install FreeBird as a Windows service.")
+        {
+            configOpt, serviceAccountOpt, servicePasswordOpt,
+        };
+        installCmd.SetAction(async (parseResult, ct) =>
+        {
+            if (ShortCircuitNonWindows())
+            {
+                return 1;
+            }
+            var logger = BuildServiceLeafLogger();
+            using var container = ServiceHostBuilder.BuildContainer(logger);
+            using var scope = container.BeginLifetimeScope();
+            var args = new InstallArgs(
+                parseResult.GetValue(configOpt)!,
+                parseResult.GetValue(serviceAccountOpt),
+                parseResult.GetValue(servicePasswordOpt));
+            return await InstallCommand.HandleAsync(
+                args,
+                scope.Resolve<IElevationChecker>(),
+                new JsonConfigLoader(logger),
+                scope.Resolve<IServiceController>(),
+                scope.Resolve<IEventLogWriter>(),
+                Console.Out,
+                Console.Error,
+                Console.In,
+                ct);
+        });
+
+        // --- uninstall ---
+        var uninstallCmd = new Command("uninstall", "Uninstall the FreeBird Windows service.")
+        {
+            nameOpt, yesOpt, timeoutOpt,
+        };
+        uninstallCmd.SetAction(async (parseResult, ct) =>
+        {
+            if (ShortCircuitNonWindows())
+            {
+                return 1;
+            }
+            var logger = BuildServiceLeafLogger();
+            using var container = ServiceHostBuilder.BuildContainer(logger);
+            using var scope = container.BeginLifetimeScope();
+            var args = new UninstallCommand.UninstallArgs(
+                parseResult.GetValue(yesOpt),
+                parseResult.GetValue(nameOpt)!,
+                TimeSpan.FromSeconds(parseResult.GetValue(timeoutOpt)));
+            return await UninstallCommand.HandleAsync(
+                args,
+                scope.Resolve<IElevationChecker>(),
+                scope.Resolve<IServiceController>(),
+                scope.Resolve<IEventLogWriter>(),
+                Console.In,
+                Console.Out,
+                Console.Error,
+                ct);
+        });
+
+        // --- start ---
+        var startCmd = new Command("start", "Start the FreeBird Windows service.")
+        {
+            nameOpt, timeoutOpt,
+        };
+        startCmd.SetAction(async (parseResult, ct) =>
+        {
+            if (ShortCircuitNonWindows())
+            {
+                return 1;
+            }
+            var logger = BuildServiceLeafLogger();
+            using var container = ServiceHostBuilder.BuildContainer(logger);
+            using var scope = container.BeginLifetimeScope();
+            return await StartCommand.HandleAsync(
+                parseResult.GetValue(nameOpt)!,
+                TimeSpan.FromSeconds(parseResult.GetValue(timeoutOpt)),
+                scope.Resolve<IElevationChecker>(),
+                scope.Resolve<IServiceController>(),
+                Console.Out,
+                Console.Error,
+                ct);
+        });
+
+        // --- stop ---
+        var stopCmd = new Command("stop", "Stop the FreeBird Windows service.")
+        {
+            nameOpt, timeoutOpt,
+        };
+        stopCmd.SetAction(async (parseResult, ct) =>
+        {
+            if (ShortCircuitNonWindows())
+            {
+                return 1;
+            }
+            var logger = BuildServiceLeafLogger();
+            using var container = ServiceHostBuilder.BuildContainer(logger);
+            using var scope = container.BeginLifetimeScope();
+            return await StopCommand.HandleAsync(
+                parseResult.GetValue(nameOpt)!,
+                TimeSpan.FromSeconds(parseResult.GetValue(timeoutOpt)),
+                scope.Resolve<IElevationChecker>(),
+                scope.Resolve<IServiceController>(),
+                Console.Out,
+                Console.Error,
+                ct);
+        });
+
+        // --- restart ---
+        var restartCmd = new Command("restart", "Restart the FreeBird Windows service.")
+        {
+            nameOpt, timeoutOpt,
+        };
+        restartCmd.SetAction(async (parseResult, ct) =>
+        {
+            if (ShortCircuitNonWindows())
+            {
+                return 1;
+            }
+            var logger = BuildServiceLeafLogger();
+            using var container = ServiceHostBuilder.BuildContainer(logger);
+            using var scope = container.BeginLifetimeScope();
+            return await RestartCommand.HandleAsync(
+                parseResult.GetValue(nameOpt)!,
+                TimeSpan.FromSeconds(parseResult.GetValue(timeoutOpt)),
+                scope.Resolve<IElevationChecker>(),
+                scope.Resolve<IServiceController>(),
+                Console.Out,
+                Console.Error,
+                ct);
+        });
+
+        // --- status (no elevation required) ---
+        var statusCmd = new Command("status", "Show the FreeBird Windows service status.")
+        {
+            nameOpt,
+        };
+        statusCmd.SetAction(parseResult =>
+        {
+            if (ShortCircuitNonWindows())
+            {
+                return 1;
+            }
+            var logger = BuildServiceLeafLogger();
+            using var container = ServiceHostBuilder.BuildContainer(logger);
+            using var scope = container.BeginLifetimeScope();
+            return StatusCommand.Handle(
+                parseResult.GetValue(nameOpt)!,
+                scope.Resolve<IServiceController>(),
+                TimeProvider.System,
+                Console.Out,
+                Console.Error);
+        });
+
+        // --- run (hidden SCM entrypoint) ---
+        var runCmd = new Command("run", "Service Control Manager entrypoint (internal).")
+        {
+            configOpt,
+        };
+        runCmd.Hidden = true;
+        runCmd.SetAction(async (parseResult, ct) =>
+            await RunCommand.HandleAsync(
+                parseResult.GetValue(configOpt)!,
+                RunCommand.IsRunningAsWindowsService,
+                Console.Out,
+                Console.Error,
+                ct));
+
+        var serviceCommand = ServiceCommand.Create();
+        serviceCommand.Subcommands.Add(initCmd);
+        serviceCommand.Subcommands.Add(installCmd);
+        serviceCommand.Subcommands.Add(uninstallCmd);
+        serviceCommand.Subcommands.Add(startCmd);
+        serviceCommand.Subcommands.Add(stopCmd);
+        serviceCommand.Subcommands.Add(restartCmd);
+        serviceCommand.Subcommands.Add(statusCmd);
+        serviceCommand.Subcommands.Add(runCmd);
+        return serviceCommand;
     }
 }

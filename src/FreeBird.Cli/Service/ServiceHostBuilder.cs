@@ -49,4 +49,24 @@ public static class ServiceHostBuilder
 
         return builder.Build();
     }
+
+    /// <summary>
+    /// T22 — config-less overload for the <c>fb service</c> leaves that run BEFORE (or entirely
+    /// without) a parsed config: <c>start</c> / <c>stop</c> / <c>restart</c> / <c>status</c> /
+    /// <c>uninstall</c>. These only need the SCM-control trio
+    /// (<c>IServiceController</c> / <c>IElevationChecker</c> / <c>IEventLogWriter</c>) plus the
+    /// pinned Serilog logger; they never resolve the FLAC pipeline, so a default
+    /// <see cref="FreeBird.Core.Provisioning.FlacResolverOptions"/> (from <c>CoreModule</c>) is
+    /// sufficient and no <c>watch.flac.*</c> override is applied.
+    /// </summary>
+    public static IContainer BuildContainer(Serilog.ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(logger);
+
+        var builder = new ContainerBuilder();
+        builder.RegisterModule<CoreModule>();
+        builder.RegisterModule<CliServiceModule>();
+        builder.RegisterInstance(logger).As<Serilog.ILogger>().SingleInstance();
+        return builder.Build();
+    }
 }

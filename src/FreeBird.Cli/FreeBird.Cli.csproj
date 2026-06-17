@@ -57,6 +57,15 @@
       file makes the call a no-op on non-Windows while keeping the module compiling.
     -->
     <Compile Remove="DependencyInjection/CliServiceModule.Windows.cs" />
+    <!--
+      T22: the Windows host body for `fb service run` references the Windows-only
+      Microsoft.Extensions.Hosting.WindowsServices (UseWindowsService) and the
+      Serilog EventLog sink, both restored on Windows only. Exclude it on macOS /
+      Linux; the sibling RunCommand.NonWindows.cs supplies the partial-method body
+      there. RunCommand.HandleAsync's OperatingSystem.IsWindows() guard guarantees
+      the Windows body is never reached off-Windows.
+    -->
+    <Compile Remove="Commands/Service/RunCommand.Windows.cs" />
   </ItemGroup>
 
   <PropertyGroup>
