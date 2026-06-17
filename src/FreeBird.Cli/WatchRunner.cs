@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Autofac;
+using FreeBird.Cli.DependencyInjection;
 using FreeBird.Core.Abstractions;
 using FreeBird.Core.DependencyInjection;
 using FreeBird.Core.Models;
@@ -368,6 +369,7 @@ public sealed class WatchRunner
     {
         var builder = new ContainerBuilder();
         builder.RegisterModule<CoreModule>();
+        builder.RegisterModule<CliServiceModule>();
         builder.RegisterInstance(logger).As<ILogger>().SingleInstance();
 
         // T15: override CoreModule's default FlacResolverOptions factory with one populated

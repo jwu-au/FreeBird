@@ -7,6 +7,13 @@
   <ItemGroup>
     <PackageReference Include="Autofac" Version="9.1.0" />
     <PackageReference Include="AutofacSerilogIntegration" Version="5.0.0" />
+    <!--
+      T13 (v3.5 Windows Service): cross-OS abstractions only. BackgroundService /
+      IHostedService (consumed by WatchHostedService) and ILogger<T> live here and
+      build on every OS. The Windows SCM host (Microsoft.Extensions.Hosting.WindowsServices)
+      stays in the Windows-only ItemGroup below — this package is the OS-agnostic subset.
+    -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.9" />
     <PackageReference Include="Serilog" Version="4.3.1" />
     <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
@@ -43,6 +50,13 @@
     <Compile Remove="Service/WindowsEventLogWriter.cs" />
     <Compile Remove="Service/WindowsServiceController.cs" />
     <Compile Remove="Service/Advapi32Interop.cs" />
+    <!--
+      T14: the Windows half of CliServiceModule references WindowsServiceController /
+      WindowsEventLogWriter (excluded above), so it is excluded too. The base
+      CliServiceModule.cs declares RegisterWindows as a partial method, so omitting this
+      file makes the call a no-op on non-Windows while keeping the module compiling.
+    -->
+    <Compile Remove="DependencyInjection/CliServiceModule.Windows.cs" />
   </ItemGroup>
 
   <PropertyGroup>
