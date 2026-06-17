@@ -36,6 +36,9 @@
   -->
   <ItemGroup Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
     <Compile Remove="Service/WindowsEventLogWriterTests.cs" />
+    <Compile Remove="Service/WindowsServiceControllerIntegrationTests.cs" />
+    <Compile Remove="Service/EventLogIntegrationTests.cs" />
+    <Compile Remove="Service/LogFileFallbackIntegrationTests.cs" />
   </ItemGroup>
 
   <ItemGroup>
