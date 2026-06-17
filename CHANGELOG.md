@@ -5,6 +5,20 @@ All notable changes to FreeBird are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.0] — 2026-06-17
+
+### Added
+- **Windows Service mode**: new `fb service` subcommand tree — `init`, `install`, `uninstall`, `start`, `stop`, `restart`, `status` (7 visible) plus a hidden `run` SCM entrypoint. Registers FreeBird as a native Windows Service that wraps the `fb watch` pipeline.
+- **JSON service config**: `fb service init` generates a default config; schema shipped at `schemas/service.config.json`; loaded/validated by `JsonConfigLoader`.
+- **Windows Event Log integration**: service writes to the `FreeBird` source in the Application log; source created on install, removed on uninstall.
+- **Rolling daily file logs** in service mode at `%ProgramData%\FreeBird\logs\watch-YYYY-MM-DD.log`, with automatic fallback to the ProgramData default when a configured `log_file` is unwritable.
+- **Admin elevation + service-account support**: `--service-account` / `--service-password` (or `FB_SERVICE_PASSWORD`), with a LocalSystem-vs-user-profile-path warning.
+
+### Documentation
+- README 'Running as a Windows Service' section + macOS launchd / Linux systemd power-user snippets + platform support matrix.
+
+**No breaking changes.** `fb scan`, `fb watch`, and `fb install-flac` are unchanged.
+
 ## [3.4.1] — 2026-06-13
 
 ### Fixed

@@ -193,6 +193,129 @@ On macOS/Linux it prints a friendly hint to use your package manager and exits.
 
 ---
 
+## Running as a Windows Service
+
+> Placed here (right after `fb install-flac`, before *Multiple input directories*) so all Windows-specific commands live together.
+
+FreeBird can run as a native **Windows Service** that continuously decodes your NetEase cache in the background — it wraps the same pipeline as `fb watch`, just supervised by the OS so it survives reboots and logouts. **Windows-only**; macOS/Linux users should see the [appendix below](#macos--linux-power-users).
+
+### Quickstart
+
+Run these in an **elevated (Administrator) PowerShell** for the `install`/`start` steps:
+
+```powershell
+# 1. Write a default config to %ProgramData%\FreeBird\config.json
+#    (use --output to choose a different path; --force to overwrite an existing one)
+fb service init
+
+# 2. Edit the config: set inputs[] to your NetEase cache dir(s) and the output dir
+notepad C:\ProgramData\FreeBird\config.json
+
+# 3. Register the service (requires elevated/Admin PowerShell)
+fb service install --config C:\ProgramData\FreeBird\config.json
+
+# 4. Start it
+fb service start
+
+# 5. Check it's running
+fb service status
+```
+
+### Subcommand reference
+
+| Command | What it does | Requires Admin |
+|---|---|---|
+| `fb service init` | Write a default JSON config to `%ProgramData%\FreeBird\config.json` (`--output`, `--force`). | No |
+| `fb service install` | Register FreeBird as a Windows Service (`--config`, `--service-account`, `--service-password`). | Yes |
+| `fb service uninstall` | Remove the registered service. | Yes |
+| `fb service start` | Start the service. | Yes |
+| `fb service stop` | Stop the service. | Yes |
+| `fb service restart` | Restart the service (apply config changes). | Yes |
+| `fb service status` | Show current state + uptime. | No |
+
+> There is also an internal `fb service run` subcommand — it is invoked by the Windows **Service Control Manager** as the service entrypoint and is **not for interactive use**.
+
+### Exit codes
+
+Each subcommand returns documented exit codes — `0` for success, non-zero per failure class:
+
+| Subcommand | Exit codes |
+|---|---|
+| `install` | `0` success · `1` not admin · `2` already installed · `3` config invalid · `4` SCM error |
+| `start` | `0` success · `1` general error · `2` not installed · `3` already running · `4` SCM error |
+| `stop` | `0` success · `1` general error · `2` not installed · `3` already stopped · `4` SCM error |
+| `restart` | `0` success · `1` general error · `2` not installed · `3` SCM error |
+| `status` | `0` running · `1` not installed · `2` stopped · `3` other |
+
+### Configuration
+
+The config file is JSON, validated against the schema shipped at `schemas/service.config.json`. Set `inputs[]` to one or more NetEase cache directories and pick an `output` directory. After editing the config, run `fb service restart` for changes to take effect.
+
+### Troubleshooting
+
+- **LocalSystem can't read user-profile paths.** The default service account (`LocalSystem`) cannot read user-profile locations like `%LocalAppData%\NetEase\...`. If your cache lives under a user profile, install with `--service-account <DOMAIN\user>` so the service runs as an identity that can read those files — a **gMSA** (group Managed Service Account) is recommended.
+- **Service-account password.** Pass `--service-password` or set the `FB_SERVICE_PASSWORD` environment variable at install time. Rotate per your org policy and re-run `fb service install` afterwards.
+- **Logs.** The service writes a rolling daily file at `%ProgramData%\FreeBird\logs\watch-YYYY-MM-DD.log`, and also emits to the Windows **Event Log** (source `FreeBird`, under the Application log).
+
+### macOS & Linux (power users)
+
+FreeBird's native service mode is Windows-only, but `fb watch` is a long-running foreground process that any OS init system can supervise.
+
+**macOS — launchd** (`~/Library/LaunchAgents/com.freebird.watch.plist`):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.freebird.watch</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/fb</string>
+        <string>watch</string>
+        <string>/Users/me/NetEaseCache</string>
+        <string>-o</string>
+        <string>/Users/me/Music/FreeBird</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+</dict>
+</plist>
+```
+
+Load it with `launchctl load ~/Library/LaunchAgents/com.freebird.watch.plist`.
+
+**Linux — systemd** (`/etc/systemd/system/freebird.service`):
+
+```ini
+[Unit]
+Description=FreeBird NetEase cache decoder (fb watch)
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/fb watch /home/me/NetEaseCache -o /home/me/Music/FreeBird
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable it with `sudo systemctl enable --now freebird`.
+
+### Platform support matrix
+
+| Feature | Windows | macOS | Linux |
+|---|---|---|---|
+| `fb scan` / `fb watch` | ✅ | ✅ | ✅ |
+| `fb service` (native service) | ✅ | ❌ use launchd | ❌ use systemd |
+| Auto `flac` install | ✅ | manual | manual |
+
+---
+
 ## Multiple input directories
 
 Both `fb scan` and `fb watch` accept one or more input directories. Decoded files are placed into a single shared output (flat layout).
