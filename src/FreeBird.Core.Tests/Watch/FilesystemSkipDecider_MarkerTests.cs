@@ -504,14 +504,16 @@ public sealed class FilesystemSkipDecider_MarkerTests : IDisposable
     }
 
     // =======================================================================
-    // 14. MarkerSchemaTwo_FallsThroughToBranch3c_LogsWarn
+    // 14. SkipDecider_Schema2Marker_Accepted
     //
-    // Marker with Schema=2 written via the real serializer (which doesn't
-    // validate Schema). Decider sees marker.Schema > SupportedMarkerSchema (1),
-    // logs WRN, falls through. With no musicId-only output → Process.
+    // T2 (Schema 2): a Schema=2 marker is now within the supported range
+    // (SupportedMarkerSchema == 2). A fresh, output-present Schema=2 marker must
+    // be HONORED (short-circuit → Skip), NOT rejected as unsupported. Replaces
+    // the prior MarkerSchemaTwo_FallsThroughToBranch3c_LogsWarn assertion, which
+    // pinned the old supported range of 1.
     // =======================================================================
     [Fact]
-    public async Task MarkerSchemaTwo_FallsThroughToBranch3c_LogsWarn()
+    public async Task SkipDecider_Schema2Marker_Accepted()
     {
         var root = NewTempDir();
         var src = CreateSource(root, "3367798042-_-_5999-_-_abc.uc!");
@@ -525,11 +527,12 @@ public sealed class FilesystemSkipDecider_MarkerTests : IDisposable
 
         var decision = await decider.DecideAsync(src, opts, CancellationToken.None);
 
-        decision.ShouldProcess.Should().BeTrue();
-        var warn = WarnEvents(sink).Should().ContainSingle(e =>
-            e.RenderMessage().Contains("schema", StringComparison.OrdinalIgnoreCase)).Subject;
-        warn.RenderMessage().Should().ContainAny("schema", "Schema");
-        MarkerHitDebug(sink).Should().BeEmpty();
+        decision.ShouldProcess.Should().BeFalse();
+        decision.Reason.Should().Be(SkipReason.AlreadyDecodedViaMarker);
+        // No "unsupported schema" WRN — schema 2 is now accepted.
+        WarnEvents(sink).Should().NotContain(e =>
+            e.RenderMessage().Contains("unsupported schema", StringComparison.OrdinalIgnoreCase));
+        MarkerHitDebug(sink).Should().ContainSingle();
     }
 
     // =======================================================================

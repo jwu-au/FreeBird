@@ -541,13 +541,14 @@ public sealed class FileProcessor : IFileProcessor
             MarkerStatus.Resolved => null,
             MarkerStatus.MetadataEmpty => "metadata-empty",
             MarkerStatus.MetadataFetchFailed => "metadata-fetch-failed",
+            MarkerStatus.MetadataRateLimited => "metadata-rate-limited",
             MarkerStatus.MetadataDeserializeFailed => "metadata-deserialize-failed",
             _ => throw new InvalidOperationException($"Unknown MarkerStatus: {status}"),
         };
 
         return new ResolutionMarker
         {
-            Schema = 1,
+            Schema = 2,
             SourceStem = sourceStem,
             MusicId = MusicIdExtractor.TryExtractAsString(sourcePath) ?? "",
             SourcePath = sourcePath,

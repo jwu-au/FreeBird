@@ -27,7 +27,7 @@ public sealed class FilesystemSkipDecider : ISkipDecider
 {
     private static readonly string[] OutputExtensions = { ".mp3", ".flac", ".m4a" };
     private const string FailedDirName = ".freebird-failed";
-    private const int SupportedMarkerSchema = 1;
+    private const int SupportedMarkerSchema = 2;
 
     private readonly ISidecarReader _sidecarReader;
     private readonly ResolutionMarkerSerializer _markerSerializer;

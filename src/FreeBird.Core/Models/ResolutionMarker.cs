@@ -10,13 +10,20 @@ namespace FreeBird.Core.Models;
 /// of already-migrated outputs.
 /// </summary>
 /// <remarks>
-/// All 14 fields are part of the v3.0.1 schema (<see cref="Schema"/> = 1).
+/// The original v3.0.1 launch shape (<see cref="Schema"/> = 1) carries the core
+/// freshness/identity/outcome fields. Schema 2 adds three additive nullable
+/// fields — <c>attempt_count</c>, <c>output_size</c>, <c>output_mtime</c> — that
+/// older Schema 1 markers omit and still parse (none are <see cref="JsonRequiredAttribute"/>).
 /// Property names are PascalCase in C# and serialized as snake_case JSON via
 /// <see cref="ResolutionMarkerJson.Options"/>.
 /// </remarks>
 public sealed record ResolutionMarker
 {
-    /// <summary>Schema version. v3.0.1 launches as <c>1</c>.</summary>
+    /// <summary>
+    /// Schema version. v3.0.1 launched as <c>1</c>; newly written markers use
+    /// <c>2</c> (the additive <c>attempt_count</c>/<c>output_size</c>/<c>output_mtime</c>
+    /// fields). The skip decider accepts both 1 and 2.
+    /// </summary>
     [JsonRequired]
     public required int Schema { get; init; }
 
@@ -92,6 +99,32 @@ public sealed record ResolutionMarker
     /// </summary>
     [JsonPropertyName("tag_write_reason")]
     public string? TagWriteReason { get; init; }
+
+    /// <summary>
+    /// Number of consecutive failed resolution attempts recorded for this source
+    /// (Schema 2 additive field). <c>null</c> when not applicable or on pre-Schema-2
+    /// markers. Forward-compatible: pre-Schema-2 markers omit this field and still parse.
+    /// </summary>
+    [JsonPropertyName("attempt_count")]
+    public int? AttemptCount { get; init; }
+
+    /// <summary>
+    /// Size in bytes of the written output at the time of the attempt (Schema 2
+    /// additive field; used later by the cleanup identity proof). <c>null</c> when
+    /// not applicable or on pre-Schema-2 markers.
+    /// Forward-compatible: pre-Schema-2 markers omit this field and still parse.
+    /// </summary>
+    [JsonPropertyName("output_size")]
+    public long? OutputSize { get; init; }
+
+    /// <summary>
+    /// Last-write time of the written output at the time of the attempt (Schema 2
+    /// additive field; a corroborating cleanup signal). <c>null</c> when not
+    /// applicable or on pre-Schema-2 markers.
+    /// Forward-compatible: pre-Schema-2 markers omit this field and still parse.
+    /// </summary>
+    [JsonPropertyName("output_mtime")]
+    public DateTimeOffset? OutputMtime { get; init; }
 }
 
 /// <summary>
@@ -108,6 +141,12 @@ public enum MarkerStatus
 
     /// <summary>Metadata fetch failed (network/HTTP/timeout).</summary>
     MetadataFetchFailed,
+
+    /// <summary>
+    /// Metadata fetch was rate-limited / risk-controlled by the server
+    /// (HTTP 429/403/5xx or body code -460/-447); retry with moderate backoff.
+    /// </summary>
+    MetadataRateLimited,
 
     /// <summary>Metadata fetch returned a payload that could not be deserialized.</summary>
     MetadataDeserializeFailed,
@@ -129,6 +168,7 @@ internal sealed class MarkerStatusJsonConverter : JsonConverter<MarkerStatus>
             "resolved" => MarkerStatus.Resolved,
             "metadata-empty" => MarkerStatus.MetadataEmpty,
             "metadata-fetch-failed" => MarkerStatus.MetadataFetchFailed,
+            "metadata-rate-limited" => MarkerStatus.MetadataRateLimited,
             "metadata-deserialize-failed" => MarkerStatus.MetadataDeserializeFailed,
             _ => throw new JsonException($"Unknown MarkerStatus value: '{value}'."),
         };
@@ -141,6 +181,7 @@ internal sealed class MarkerStatusJsonConverter : JsonConverter<MarkerStatus>
             MarkerStatus.Resolved => "resolved",
             MarkerStatus.MetadataEmpty => "metadata-empty",
             MarkerStatus.MetadataFetchFailed => "metadata-fetch-failed",
+            MarkerStatus.MetadataRateLimited => "metadata-rate-limited",
             MarkerStatus.MetadataDeserializeFailed => "metadata-deserialize-failed",
             _ => throw new JsonException($"Unknown MarkerStatus enum value: {value}."),
         };

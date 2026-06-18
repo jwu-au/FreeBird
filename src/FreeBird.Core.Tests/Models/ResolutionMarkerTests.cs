@@ -332,4 +332,109 @@ public class ResolutionMarkerTests
         Assert.Contains("\"tag_write_status\": null", json);
         Assert.Contains("\"tag_write_reason\": null", json);
     }
+
+    // T2 (Schema 2): a hand-written Schema=1 marker that OMITS the three new
+    // additive fields (attempt_count, output_size, output_mtime) must still
+    // parse cleanly, with the new props defaulting to null. This is the headline
+    // back-compat proof — the additive fields must NOT be [JsonRequired].
+    [Fact]
+    public void Marker_Schema1_MissingNewFields_StillParses()
+    {
+        var json = """
+        {
+          "schema": 1,
+          "source_stem": "3367798042-_-_5999-_-_abc",
+          "music_id": "3367798042",
+          "source_path": "/tmp/foo.uc!",
+          "source_size": 1024,
+          "source_mtime": "2026-06-10T18:42:11.7587980+00:00",
+          "resolved_at": "2026-06-10T23:18:01.1234567+00:00",
+          "status": "resolved",
+          "output_name": "out.flac",
+          "format": "Flac",
+          "integrity": "L3",
+          "naming_template": "{artist} - {title}",
+          "reason": null,
+          "retry_after": null
+        }
+        """;
+
+        var marker = JsonSerializer.Deserialize<ResolutionMarker>(json, ResolutionMarkerJson.Options);
+
+        Assert.NotNull(marker);
+        Assert.Null(marker!.AttemptCount);
+        Assert.Null(marker.OutputSize);
+        Assert.Null(marker.OutputMtime);
+    }
+
+    // T2 (Schema 2): a Schema=2 marker carrying the three new fields round-trips
+    // them exactly through the canonical serializer options.
+    [Fact]
+    public void Marker_Schema2_RoundTrips_NewFields()
+    {
+        var outputMtime = new DateTimeOffset(2026, 6, 11, 9, 5, 30, TimeSpan.Zero).AddTicks(4242424);
+        var marker = BuildResolvedMarker() with
+        {
+            Schema = 2,
+            AttemptCount = 3,
+            OutputSize = 12345L,
+            OutputMtime = outputMtime,
+        };
+
+        var json = JsonSerializer.Serialize(marker, ResolutionMarkerJson.Options);
+        var roundTripped = JsonSerializer.Deserialize<ResolutionMarker>(json, ResolutionMarkerJson.Options);
+
+        Assert.NotNull(roundTripped);
+        Assert.Equal(2, roundTripped!.Schema);
+        Assert.Equal(3, roundTripped.AttemptCount);
+        Assert.Equal(12345L, roundTripped.OutputSize);
+        Assert.Equal(outputMtime, roundTripped.OutputMtime);
+    }
+
+    // T2: the new MetadataRateLimited status serializes to "metadata-rate-limited"
+    // and deserializes back to the same enum value.
+    [Fact]
+    public void MarkerStatus_RateLimited_KebabRoundTrips()
+    {
+        var marker = BuildResolvedMarker() with
+        {
+            Status = MarkerStatus.MetadataRateLimited,
+            Reason = "metadata-rate-limited",
+        };
+
+        var json = JsonSerializer.Serialize(marker, ResolutionMarkerJson.Options);
+        Assert.Contains("\"status\": \"metadata-rate-limited\"", json);
+
+        var roundTripped = JsonSerializer.Deserialize<ResolutionMarker>(json, ResolutionMarkerJson.Options);
+        Assert.NotNull(roundTripped);
+        Assert.Equal(MarkerStatus.MetadataRateLimited, roundTripped!.Status);
+    }
+
+    // T2: an unknown status string must still throw — proves the Read converter's
+    // `_ => throw` forward-safety arm is preserved after adding the new value.
+    [Fact]
+    public void MarkerStatus_UnknownString_Throws()
+    {
+        var json = """
+        {
+          "schema": 2,
+          "source_stem": "s",
+          "music_id": "1",
+          "source_path": "/p",
+          "source_size": 1,
+          "source_mtime": "2026-06-10T18:42:11.7587980+00:00",
+          "resolved_at": "2026-06-10T23:18:01.1234567+00:00",
+          "status": "totally-bogus",
+          "output_name": "out.flac",
+          "format": "Flac",
+          "integrity": "L3",
+          "naming_template": "{title}",
+          "reason": null,
+          "retry_after": null
+        }
+        """;
+
+        Assert.Throws<JsonException>(
+            () => JsonSerializer.Deserialize<ResolutionMarker>(json, ResolutionMarkerJson.Options));
+    }
 }
