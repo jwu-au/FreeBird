@@ -34,6 +34,10 @@ public sealed class NetEaseApiClient : INetEaseApiClient
         PropertyNameCaseInsensitive = true,
     };
 
+    // T4: server Retry-After values are clamped to this ceiling so a hostile or
+    // erroneous header cannot cold-store a file for an unbounded time.
+    private static readonly TimeSpan RetryAfterCeiling = TimeSpan.FromHours(6);
+
     private readonly HttpClient _http;
     private readonly ILogger _log;
     // v3.4 T02: dual-gate. Rate bucket FIRST (bounded wait, max ~1/rate seconds),
@@ -41,6 +45,8 @@ public sealed class NetEaseApiClient : INetEaseApiClient
     // actual HTTP work). Ordering rationale documented in plan §M5.
     private readonly ITokenBucketRateLimiter _rateBucket;
     private readonly IGlobalApiRateLimiter _concurrencyGate;
+    // T4: needed to compute a Retry-After delta from an HTTP-date header (date - now).
+    private readonly TimeProvider _timeProvider;
     // Spec §5: both id and ids must be present; ids is URL-encoded [id].
     // Built per-instance so the FB_NETEASE_BASEURL test seam is observed at ctor time
     // (a static initializer would capture once per process and break sequential E2E
@@ -51,12 +57,14 @@ public sealed class NetEaseApiClient : INetEaseApiClient
         HttpClient http,
         ILogger log,
         ITokenBucketRateLimiter rateBucket,
-        IGlobalApiRateLimiter concurrencyGate)
+        IGlobalApiRateLimiter concurrencyGate,
+        TimeProvider timeProvider)
     {
         _http = http;
         _log = log.ForContext<NetEaseApiClient>();
         _rateBucket = rateBucket;
         _concurrencyGate = concurrencyGate;
+        _timeProvider = timeProvider;
         _urlFormat = BuildUrlFormat();
     }
 
@@ -96,7 +104,33 @@ public sealed class NetEaseApiClient : INetEaseApiClient
             using var slot = await _concurrencyGate.AcquireAsync(linkedCts.Token).ConfigureAwait(false);
 
             using var response = await _http.GetAsync(url, linkedCts.Token).ConfigureAwait(false);
-            response.EnsureSuccessStatusCode();
+
+            // T4: classify by HTTP STATUS FIRST. EnsureSuccessStatusCode() is gone —
+            // it collapsed every non-2xx (incl. 429) into a thrown HttpRequestException
+            // -> NetworkError, hiding rate-limiting. Body-code inspection only refines
+            // the HTTP-200 path; for non-2xx the body is best-effort and never parsed
+            // (429/503 commonly return empty or HTML).
+            var statusCode = (int)response.StatusCode;
+
+            if (statusCode == 429 || statusCode == 403 || statusCode >= 500)
+            {
+                var retryAfter = ParseRetryAfter(response);
+                _log.Warning(
+                    "NetEase API failure for {MusicId}: RateLimited (HTTP {Status}), RetryAfter={RetryAfter}",
+                    musicId, statusCode, retryAfter);
+                return new NetEaseApiResult.RateLimited(retryAfter);
+            }
+
+            if (statusCode is < 200 or > 299)
+            {
+                // Server answered with something we don't model (e.g. 404/400). A 24h
+                // bucket (DeserializationError) is safer than NetworkError's fast retry.
+                var reason = $"unexpected http status {statusCode}";
+                _log.Warning("NetEase API failure for {MusicId}: DeserializationError: {Reason}", musicId, reason);
+                return new NetEaseApiResult.DeserializationError(reason);
+            }
+
+            // HTTP 2xx: inspect the body. JSON failures here remain DeserializationError.
             var json = await response.Content.ReadAsStringAsync(linkedCts.Token).ConfigureAwait(false);
 
             NetEaseResponseDto? payload;
@@ -108,6 +142,23 @@ public sealed class NetEaseApiClient : INetEaseApiClient
             {
                 _log.Warning("NetEase API failure for {MusicId}: DeserializationError: {Reason}", musicId, jx.Message);
                 return new NetEaseApiResult.DeserializationError(jx.Message);
+            }
+
+            var bodyCode = payload?.Code ?? 0;
+            if (NetEaseApiCodes.RiskControl.Contains(bodyCode))
+            {
+                var retryAfter = ParseRetryAfter(response);
+                _log.Warning(
+                    "NetEase API failure for {MusicId}: RateLimited (body code {Code}), RetryAfter={RetryAfter}",
+                    musicId, bodyCode, retryAfter);
+                return new NetEaseApiResult.RateLimited(retryAfter);
+            }
+
+            if (bodyCode != NetEaseApiCodes.Success)
+            {
+                var reason = $"unexpected api code {bodyCode}";
+                _log.Warning("NetEase API failure for {MusicId}: DeserializationError: {Reason}", musicId, reason);
+                return new NetEaseApiResult.DeserializationError(reason);
             }
 
             if (payload?.Songs is null || payload.Songs.Count == 0)
@@ -143,5 +194,38 @@ public sealed class NetEaseApiClient : INetEaseApiClient
             _log.Warning("NetEase API failure for {MusicId}: NetworkError: {Reason}", musicId, hx.Message);
             return new NetEaseApiResult.NetworkError(hx.Message);
         }
+    }
+
+    /// <summary>
+    /// Best-effort parse of the <c>Retry-After</c> header into a positive delay,
+    /// clamped to <see cref="RetryAfterCeiling"/>. Prefers the delta-seconds form;
+    /// falls back to the HTTP-date form computed against the injected clock
+    /// (<c>date - now</c>, floored at zero). Returns <c>null</c> when the header is
+    /// absent or carries neither a delta nor a date.
+    /// </summary>
+    private TimeSpan? ParseRetryAfter(HttpResponseMessage response)
+    {
+        var retryAfter = response.Headers.RetryAfter;
+        if (retryAfter is null)
+        {
+            return null;
+        }
+
+        TimeSpan? delay;
+        if (retryAfter.Delta is { } delta)
+        {
+            delay = delta;
+        }
+        else if (retryAfter.Date is { } date)
+        {
+            var computed = date - _timeProvider.GetUtcNow();
+            delay = computed < TimeSpan.Zero ? TimeSpan.Zero : computed;
+        }
+        else
+        {
+            return null;
+        }
+
+        return delay > RetryAfterCeiling ? RetryAfterCeiling : delay;
     }
 }

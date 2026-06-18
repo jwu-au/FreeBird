@@ -42,4 +42,15 @@ public abstract record NetEaseApiResult
     /// </summary>
     /// <param name="Message">Human-readable diagnostic for logging.</param>
     public sealed record DeserializationError(string Message) : NetEaseApiResult;
+
+    /// <summary>
+    /// Server throttled/risk-controlled the request (HTTP 429/403/5xx or body
+    /// code -460/-447). <paramref name="RetryAfter"/> is the server-stated minimum
+    /// wait if a Retry-After header was present (clamped to 6h), else <c>null</c>.
+    /// </summary>
+    /// <param name="RetryAfter">
+    /// Server-stated minimum wait from a Retry-After header (clamped to 6h), or
+    /// <c>null</c> when absent/unparseable.
+    /// </param>
+    public sealed record RateLimited(TimeSpan? RetryAfter) : NetEaseApiResult;
 }

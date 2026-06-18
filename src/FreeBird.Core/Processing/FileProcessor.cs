@@ -468,6 +468,7 @@ public sealed class FileProcessor : IFileProcessor
                 {
                     "metadata-empty" => MarkerStatus.MetadataEmpty,
                     "metadata-fetch-failed" => MarkerStatus.MetadataFetchFailed,
+                    "metadata-rate-limited" => MarkerStatus.MetadataRateLimited,
                     "metadata-deserialize-failed" => MarkerStatus.MetadataDeserializeFailed,
                     "offline-mode" => throw new InvalidOperationException(
                         "MapToMarkerStatus must not be called for offline-mode fallback; the caller is required to skip marker writes when Offline=true."),

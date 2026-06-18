@@ -54,6 +54,9 @@ public sealed class MetadataResolver : IMetadataResolver
             NetEaseApiResult.Timeout t => Failed(musicId, $"timeout after {t.Elapsed}"),
             NetEaseApiResult.NetworkError n => Failed(musicId, $"network error: {n.Message}"),
             NetEaseApiResult.DeserializationError d => Broken(musicId, d.Message),
+            // T5: plumb r.RetryAfter through For(...) end-to-end. For now the
+            // server Retry-After lives in the union case and is dropped here.
+            NetEaseApiResult.RateLimited r => RateLimited(musicId),
             _ => throw new InvalidOperationException($"Unknown NetEaseApiResult variant: {apiResult.GetType().Name}"),
         };
 
@@ -79,6 +82,12 @@ public sealed class MetadataResolver : IMetadataResolver
         {
             _log.Error("NetEase response could not be parsed for {MusicId}: {Reason}", id, reason);
             return new MetadataResolution.Fallback("metadata-deserialize-failed");
+        }
+
+        MetadataResolution.Fallback RateLimited(long id)
+        {
+            _log.Warning("Metadata fetch rate-limited for {MusicId}; using fallback naming with rate-limited backoff", id);
+            return new MetadataResolution.Fallback("metadata-rate-limited");
         }
     }
 }

@@ -1,6 +1,7 @@
 using System;
 using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -8,6 +9,7 @@ using FluentAssertions;
 using FreeBird.Core.Metadata;
 using FreeBird.Core.NetEase;
 using FreeBird.Core.Watch;
+using Microsoft.Extensions.Time.Testing;
 using Serilog;
 
 namespace FreeBird.Core.Tests.NetEase;
@@ -105,7 +107,7 @@ public class NetEaseApiClientTests
     public async Task Returns_Success_OnValid200WithSongs()
     {
         var handler = RespondWith(HttpStatusCode.OK, ValidJsonOneSong);
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency());
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency(), TimeProvider.System);
 
         var result = await sut.GetSongDetailAsync(3367798042L, DefaultTimeout, CancellationToken.None);
 
@@ -120,7 +122,7 @@ public class NetEaseApiClientTests
     public async Task Returns_NotFound_When_SongsArrayEmpty()
     {
         var handler = RespondWith(HttpStatusCode.OK, EmptySongsJson);
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency());
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency(), TimeProvider.System);
 
         var result = await sut.GetSongDetailAsync(42L, DefaultTimeout, CancellationToken.None);
 
@@ -133,7 +135,7 @@ public class NetEaseApiClientTests
     {
         var handler = new CapturingHandler((req, ct) =>
             throw new HttpRequestException("connection refused"));
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency());
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency(), TimeProvider.System);
 
         var result = await sut.GetSongDetailAsync(42L, DefaultTimeout, CancellationToken.None);
 
@@ -152,7 +154,7 @@ public class NetEaseApiClientTests
                 Content = new StringContent(ValidJsonOneSong),
             };
         });
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency());
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency(), TimeProvider.System);
 
         var result = await sut.GetSongDetailAsync(
             42L,
@@ -166,7 +168,7 @@ public class NetEaseApiClientTests
     public async Task Returns_DeserializationError_OnMalformedJson()
     {
         var handler = RespondWith(HttpStatusCode.OK, "not json");
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency());
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency(), TimeProvider.System);
 
         var result = await sut.GetSongDetailAsync(42L, DefaultTimeout, CancellationToken.None);
 
@@ -178,7 +180,7 @@ public class NetEaseApiClientTests
     public async Task Returns_Success_WithNullAlbum_WhenAlbumFieldMissing()
     {
         var handler = RespondWith(HttpStatusCode.OK, ValidJsonNoAlbum);
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency());
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency(), TimeProvider.System);
 
         var result = await sut.GetSongDetailAsync(3367798042L, DefaultTimeout, CancellationToken.None);
 
@@ -191,7 +193,7 @@ public class NetEaseApiClientTests
     public async Task RequestUri_ExactlyMatches_SpecFormat()
     {
         var handler = RespondWith(HttpStatusCode.OK, ValidJsonOneSong);
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency());
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency(), TimeProvider.System);
 
         await sut.GetSongDetailAsync(3367798042L, DefaultTimeout, CancellationToken.None);
 
@@ -204,7 +206,7 @@ public class NetEaseApiClientTests
     public async Task Request_IncludesUserAgent_FromSingletonClient()
     {
         var handler = RespondWith(HttpStatusCode.OK, ValidJsonOneSong);
-        var sut = new NetEaseApiClient(BuildClient(handler, withUserAgent: true), NullLogger(), UnlimitedRate(), UnlimitedConcurrency());
+        var sut = new NetEaseApiClient(BuildClient(handler, withUserAgent: true), NullLogger(), UnlimitedRate(), UnlimitedConcurrency(), TimeProvider.System);
 
         await sut.GetSongDetailAsync(3367798042L, DefaultTimeout, CancellationToken.None);
 
@@ -227,7 +229,7 @@ public class NetEaseApiClientTests
                 Content = new StringContent(ValidJsonOneSong),
             };
         });
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency());
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency(), TimeProvider.System);
 
         using var cts = new CancellationTokenSource();
         cts.Cancel(); // pre-cancelled
@@ -235,5 +237,198 @@ public class NetEaseApiClientTests
         Func<Task> act = () => sut.GetSongDetailAsync(42L, DefaultTimeout, cts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    // -----------------------------------------------------------------------
+    // T4: rate-limit / risk-control classification.
+    //
+    // NetEase signals throttling/risk-control as HTTP 200 with body code -460
+    // ("Cheating") or -447, and also via HTTP 429/403/5xx. These MUST classify
+    // as NetEaseApiResult.RateLimited, distinct from a genuine NotFound (200 +
+    // empty songs + code 200), so the backoff ladder picks the right schedule.
+    // -----------------------------------------------------------------------
+
+    private static CapturingHandler RespondWith(HttpStatusCode status, string body, TimeSpan? retryAfterDelta)
+    {
+        return new CapturingHandler((req, ct) =>
+        {
+            var response = new HttpResponseMessage(status)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            };
+            if (retryAfterDelta is { } delta)
+            {
+                response.Headers.RetryAfter = new RetryConditionHeaderValue(delta);
+            }
+            return Task.FromResult(response);
+        });
+    }
+
+    private const string RateLimited460Json = """{ "code": -460, "msg": "Cheating" }""";
+    private const string RateLimited447Json = """{ "code": -447 }""";
+    private const string UnknownCodeJson = """{ "songs": [], "code": 250 }""";
+
+    [Fact]
+    public async Task Http200_Code460_ReturnsRateLimited()
+    {
+        var handler = RespondWith(HttpStatusCode.OK, RateLimited460Json);
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency(), TimeProvider.System);
+
+        var result = await sut.GetSongDetailAsync(42L, DefaultTimeout, CancellationToken.None);
+
+        result.Should().BeOfType<NetEaseApiResult.RateLimited>();
+    }
+
+    [Fact]
+    public async Task Http200_Code447_ReturnsRateLimited()
+    {
+        var handler = RespondWith(HttpStatusCode.OK, RateLimited447Json);
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency(), TimeProvider.System);
+
+        var result = await sut.GetSongDetailAsync(42L, DefaultTimeout, CancellationToken.None);
+
+        result.Should().BeOfType<NetEaseApiResult.RateLimited>();
+    }
+
+    [Fact]
+    public async Task Http200_Code200_EmptySongs_ReturnsNotFound()
+    {
+        // Genuine not-found (200 + code 200 + empty songs) must NOT be reclassified.
+        var handler = RespondWith(HttpStatusCode.OK, EmptySongsJson);
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency(), TimeProvider.System);
+
+        var result = await sut.GetSongDetailAsync(42L, DefaultTimeout, CancellationToken.None);
+
+        result.Should().BeOfType<NetEaseApiResult.NotFound>();
+    }
+
+    [Fact]
+    public async Task Http200_Code200_WithSong_ReturnsSuccess()
+    {
+        var handler = RespondWith(HttpStatusCode.OK, ValidJsonOneSong);
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency(), TimeProvider.System);
+
+        var result = await sut.GetSongDetailAsync(3367798042L, DefaultTimeout, CancellationToken.None);
+
+        result.Should().BeOfType<NetEaseApiResult.Success>();
+    }
+
+    [Fact]
+    public async Task Http200_UnknownNonzeroCode_ReturnsDeserializationError()
+    {
+        var handler = RespondWith(HttpStatusCode.OK, UnknownCodeJson);
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency(), TimeProvider.System);
+
+        var result = await sut.GetSongDetailAsync(42L, DefaultTimeout, CancellationToken.None);
+
+        var err = result.Should().BeOfType<NetEaseApiResult.DeserializationError>().Subject;
+        err.Message.Should().Contain("250");
+    }
+
+    [Fact]
+    public async Task Http429_ReturnsRateLimited()
+    {
+        var handler = RespondWith((HttpStatusCode)429, "");
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency(), TimeProvider.System);
+
+        var result = await sut.GetSongDetailAsync(42L, DefaultTimeout, CancellationToken.None);
+
+        result.Should().BeOfType<NetEaseApiResult.RateLimited>();
+    }
+
+    [Fact]
+    public async Task Http403_ReturnsRateLimited()
+    {
+        var handler = RespondWith(HttpStatusCode.Forbidden, "");
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency(), TimeProvider.System);
+
+        var result = await sut.GetSongDetailAsync(42L, DefaultTimeout, CancellationToken.None);
+
+        result.Should().BeOfType<NetEaseApiResult.RateLimited>();
+    }
+
+    [Fact]
+    public async Task Http503_ReturnsRateLimited()
+    {
+        var handler = RespondWith(HttpStatusCode.ServiceUnavailable, "");
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency(), TimeProvider.System);
+
+        var result = await sut.GetSongDetailAsync(42L, DefaultTimeout, CancellationToken.None);
+
+        result.Should().BeOfType<NetEaseApiResult.RateLimited>();
+    }
+
+    [Fact]
+    public async Task Http503_HtmlBody_ReturnsRateLimited_NotDeserialize()
+    {
+        // M4: non-2xx + non-JSON (HTML) body must still classify by STATUS, never
+        // fall through to DeserializationError.
+        var handler = new CapturingHandler((req, ct) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+        {
+            Content = new StringContent("<html><body>503 Service Unavailable</body></html>", Encoding.UTF8, "text/html"),
+        }));
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency(), TimeProvider.System);
+
+        var result = await sut.GetSongDetailAsync(42L, DefaultTimeout, CancellationToken.None);
+
+        result.Should().BeOfType<NetEaseApiResult.RateLimited>();
+    }
+
+    [Fact]
+    public async Task Http429_WithRetryAfterSeconds_PopulatesRetryAfter()
+    {
+        var handler = RespondWith((HttpStatusCode)429, "", retryAfterDelta: TimeSpan.FromSeconds(30));
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency(), TimeProvider.System);
+
+        var result = await sut.GetSongDetailAsync(42L, DefaultTimeout, CancellationToken.None);
+
+        var limited = result.Should().BeOfType<NetEaseApiResult.RateLimited>().Subject;
+        limited.RetryAfter.Should().Be(TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public async Task Http429_WithRetryAfterHttpDate_PopulatesRetryAfter()
+    {
+        // Retry-After as an HTTP-date is computed against the injected clock, so the
+        // result is deterministic: (date - now). We pin a FakeTimeProvider and set
+        // the header 2 minutes ahead of that fixed instant.
+        var now = new DateTimeOffset(2024, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var fakeTime = new FakeTimeProvider(now);
+        var handler = new CapturingHandler((req, ct) =>
+        {
+            var response = new HttpResponseMessage((HttpStatusCode)429);
+            response.Headers.RetryAfter = new RetryConditionHeaderValue(now.AddMinutes(2));
+            return Task.FromResult(response);
+        });
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency(), fakeTime);
+
+        var result = await sut.GetSongDetailAsync(42L, DefaultTimeout, CancellationToken.None);
+
+        var limited = result.Should().BeOfType<NetEaseApiResult.RateLimited>().Subject;
+        limited.RetryAfter.Should().Be(TimeSpan.FromMinutes(2));
+    }
+
+    [Fact]
+    public async Task Http429_RetryAfterClampedTo6h()
+    {
+        var handler = RespondWith((HttpStatusCode)429, "", retryAfterDelta: TimeSpan.FromSeconds(999999));
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency(), TimeProvider.System);
+
+        var result = await sut.GetSongDetailAsync(42L, DefaultTimeout, CancellationToken.None);
+
+        var limited = result.Should().BeOfType<NetEaseApiResult.RateLimited>().Subject;
+        limited.RetryAfter.Should().Be(TimeSpan.FromHours(6));
+    }
+
+    [Fact]
+    public async Task Http429_NoRetryAfter_NullRetryAfter()
+    {
+        var handler = RespondWith((HttpStatusCode)429, "");
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), UnlimitedRate(), UnlimitedConcurrency(), TimeProvider.System);
+
+        var result = await sut.GetSongDetailAsync(42L, DefaultTimeout, CancellationToken.None);
+
+        var limited = result.Should().BeOfType<NetEaseApiResult.RateLimited>().Subject;
+        limited.RetryAfter.Should().BeNull();
     }
 }

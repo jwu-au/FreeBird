@@ -1140,6 +1140,35 @@ public class FileProcessorTests : IDisposable
     }
 
     [Fact]
+    public async Task MapToMarkerStatus_RateLimitedReason_MapsToMetadataRateLimited()
+    {
+        // MAJOR-2: a Fallback("metadata-rate-limited") must map to
+        // MarkerStatus.MetadataRateLimited. Without the explicit switch arm it
+        // would silently hit MapUnknownFallback -> MetadataFetchFailed (the wrong,
+        // fast-boot backoff ladder) — a green-build wrong-behavior bug.
+        var (sut, _, sniffer, naming, integrity, _, metadata, _) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("42.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Fallback("metadata-rate-limited"));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null, It.IsAny<string?>()))
+              .Returns("42.flac");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "42");
+        File.Exists(markerPath).Should().BeTrue();
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.Status.Should().Be(MarkerStatus.MetadataRateLimited);
+        marker.Reason.Should().Be("metadata-rate-limited");
+    }
+
+    [Fact]
     public async Task MarkerBuild_UsesInjectedTimeProvider()
     {
         // T1 determinism: the marker's ResolvedAt must come from the injected

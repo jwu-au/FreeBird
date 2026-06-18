@@ -102,7 +102,7 @@ public sealed class NetEaseApiClientDualGateTests
             return Task.FromResult(Ok());
         });
 
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), rate.Object, sem.Object);
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), rate.Object, sem.Object, TimeProvider.System);
 
         var result = await sut.GetSongDetailAsync(
             3367798042L,
@@ -148,7 +148,7 @@ public sealed class NetEaseApiClientDualGateTests
             return Ok();
         });
 
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), rate, sem);
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), rate, sem, TimeProvider.System);
 
         var result = await sut.GetSongDetailAsync(
             42L,
@@ -188,7 +188,7 @@ public sealed class NetEaseApiClientDualGateTests
 
         var handler = new CapturingHandler((_, _) => Task.FromResult(Ok()));
 
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), rate.Object, sem.Object);
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), rate.Object, sem.Object, TimeProvider.System);
 
         using var cts = new CancellationTokenSource();
         var task = sut.GetSongDetailAsync(42L, TimeSpan.FromSeconds(30), cts.Token);
@@ -228,7 +228,7 @@ public sealed class NetEaseApiClientDualGateTests
             return Task.FromResult(Ok());
         });
 
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), rate, sem.Object);
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), rate, sem.Object, TimeProvider.System);
 
         using var cts = new CancellationTokenSource();
         var task = sut.GetSongDetailAsync(42L, TimeSpan.FromSeconds(30), cts.Token);
@@ -260,7 +260,7 @@ public sealed class NetEaseApiClientDualGateTests
 
         var handler = new CapturingHandler((_, _) => Task.FromResult(Ok()));
 
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), rate, sem);
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), rate, sem, TimeProvider.System);
 
         var result = await sut.GetSongDetailAsync(
             42L,
@@ -281,7 +281,7 @@ public sealed class NetEaseApiClientDualGateTests
         await using var sem = new GlobalApiRateLimiter(maxConcurrency: 100);
 
         var handler = new CapturingHandler((_, _) => Task.FromResult(Ok()));
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), rate, sem);
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), rate, sem, TimeProvider.System);
 
         var tasks = new Task<NetEaseApiResult>[50];
         for (var i = 0; i < tasks.Length; i++)
@@ -332,7 +332,7 @@ public sealed class NetEaseApiClientDualGateTests
             }
         });
 
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), rate, sem);
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), rate, sem, TimeProvider.System);
 
         var tasks = new Task<NetEaseApiResult>[Requests];
         for (var i = 0; i < tasks.Length; i++)

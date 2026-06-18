@@ -139,6 +139,24 @@ public class MetadataResolverTests
         sink.Events.Should().Contain(e => e.Level == LogEventLevel.Error);
     }
 
+    [Fact]
+    public async Task RateLimited_MapsTo_MetadataRateLimitedFallback()
+    {
+        // T4: a RateLimited API result must map to the "metadata-rate-limited"
+        // fallback reason (distinct from metadata-empty / metadata-fetch-failed)
+        // so the marker ladder picks the rate-limited backoff schedule.
+        var apiMock = new Mock<INetEaseApiClient>();
+        apiMock.Setup(x => x.GetSongDetailAsync(It.IsAny<long>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
+               .ReturnsAsync(new NetEaseApiResult.RateLimited(TimeSpan.FromSeconds(30)));
+        var (resolver, _) = ResolverWith(apiMock.Object);
+        var opts = new ScanOptions(new[] { "in" }, "out");
+
+        var result = await resolver.ResolveAsync(SamplePath, opts, CancellationToken.None);
+
+        result.Should().BeOfType<MetadataResolution.Fallback>()
+              .Which.SidecarReason.Should().Be("metadata-rate-limited");
+    }
+
     // ------------------------------------------------------------------
     // Extra guard: musicId extraction failure
     // ------------------------------------------------------------------
