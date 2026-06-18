@@ -1490,4 +1490,266 @@ public class FileProcessorTests : IDisposable
         marker!.TagWriteStatus.Should().BeNull();
         marker.TagWriteReason.Should().BeNull();
     }
+
+    // --- T5: attempt counting + server Retry-After plumbing ---
+
+    // Builds a SUT pinned to a FakeTimeProvider, returning the mocks so individual
+    // tests can override sniffer/integrity/metadata/naming and assert RetryAfter
+    // relative to the fixed instant. Mirrors MakeMockedSut() defaults but with a
+    // deterministic clock (FakeTimeProvider) instead of TimeProvider.System.
+    private (FileProcessor sut,
+             Mock<IFormatSniffer> sniffer,
+             Mock<IFileNamer> naming,
+             Mock<ICompositeIntegrityChecker> integrity,
+             Mock<IMetadataResolver> metadata) MakeFakeTimeSut(FakeTimeProvider fakeTime)
+    {
+        var decoder = new Mock<IXorDecoder>();
+        var sniffer = new Mock<IFormatSniffer>();
+        var naming = new Mock<IFileNamer>();
+        var integrity = new Mock<ICompositeIntegrityChecker>();
+        var writer = new Mock<IAtomicFileWriter>();
+        var metadata = new Mock<IMetadataResolver>();
+        var tagWriter = new Mock<ITagWriter>();
+
+        tagWriter.Setup(t => t.WriteAsync(It.IsAny<string>(), It.IsAny<AudioFormat>(), It.IsAny<SongInfo>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(TagWriteResult.Success.Instance);
+        writer.Setup(w => w.WriteAsync(It.IsAny<string>(), It.IsAny<Func<Stream, CancellationToken, Task>>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+              .Returns<string, Func<Stream, CancellationToken, Task>, bool, CancellationToken>(async (path, callback, _, ct) =>
+              {
+                  Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                  await using var fs = File.Create(path);
+                  await callback(fs, ct);
+              });
+        decoder.Setup(d => d.DecodeAsync(It.IsAny<Stream>(), It.IsAny<Stream>(), It.IsAny<CancellationToken>()))
+               .Returns<Stream, Stream, CancellationToken>(async (_, output, ct) =>
+               {
+                   await output.WriteAsync(new byte[] { 1, 2, 3, 4 }, ct);
+               });
+
+        var logger = new Mock<ILogger>().Object;
+        var markerSerializer = new ResolutionMarkerSerializer(logger);
+        var mutexPool = new OutputPathMutexPool();
+        var sut = new FileProcessor(
+            decoder.Object, sniffer.Object, naming.Object, integrity.Object,
+            writer.Object, metadata.Object, tagWriter.Object, markerSerializer,
+            mutexPool, logger, fakeTime);
+        return (sut, sniffer, naming, integrity, metadata);
+    }
+
+    // Pre-seeds a prior marker on disk for the given stem so the next ProcessAsync
+    // can read it and compute the next attempt count.
+    private void SeedPriorMarker(
+        string stem,
+        MarkerStatus status,
+        int? attemptCount,
+        long sourceSize,
+        DateTimeOffset sourceMtime)
+    {
+        var marker = new ResolutionMarker
+        {
+            Schema = 2,
+            SourceStem = stem,
+            MusicId = stem,
+            SourcePath = Path.Combine(_inputDir, stem + ".uc"),
+            SourceSize = sourceSize,
+            SourceMtime = sourceMtime,
+            ResolvedAt = new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero),
+            Status = status,
+            OutputName = stem + ".flac",
+            Format = "Flac",
+            Integrity = "L1",
+            NamingTemplate = "{artist} - {title}",
+            Reason = status == MarkerStatus.Resolved ? null : "seeded",
+            RetryAfter = null,
+            AttemptCount = attemptCount,
+        };
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.WriteAtomic(_outputDir, marker);
+    }
+
+    [Fact]
+    public async Task AttemptCount_FirstFailure_IsOne()
+    {
+        var fixedInstant = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        var (sut, sniffer, naming, integrity, metadata) = MakeFakeTimeSut(new FakeTimeProvider(fixedInstant));
+        var ucPath = await MakeUcFileAsync("42.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Fallback("metadata-fetch-failed"));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null, It.IsAny<string?>()))
+              .Returns("42.flac");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "42");
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.Status.Should().Be(MarkerStatus.MetadataFetchFailed);
+        marker.AttemptCount.Should().Be(1);
+        var actualDelay = (marker.RetryAfter!.Value - marker.ResolvedAt).TotalSeconds;
+        actualDelay.Should().BeApproximately(TimeSpan.FromMinutes(1).TotalSeconds, 2.0);
+    }
+
+    [Fact]
+    public async Task AttemptCount_SecondConsecutiveSameFailure_SameSource_IncrementsToTwo()
+    {
+        var fixedInstant = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        var (sut, sniffer, naming, integrity, metadata) = MakeFakeTimeSut(new FakeTimeProvider(fixedInstant));
+        var ucPath = await MakeUcFileAsync("42.uc");
+
+        // The current source is 4 bytes (MakeUcFileAsync). Seed a prior marker for
+        // the SAME failure class with a matching SourceSize so the series increments.
+        var info = new FileInfo(ucPath);
+        SeedPriorMarker(
+            "42",
+            MarkerStatus.MetadataFetchFailed,
+            attemptCount: 1,
+            sourceSize: info.Length,
+            sourceMtime: new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero));
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Fallback("metadata-fetch-failed"));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null, It.IsAny<string?>()))
+              .Returns("42.flac");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "42");
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.AttemptCount.Should().Be(2);
+        // rung 2 of the fetch-failed ladder is 5m.
+        var actualDelay = (marker.RetryAfter!.Value - marker.ResolvedAt).TotalSeconds;
+        actualDelay.Should().BeApproximately(TimeSpan.FromMinutes(5).TotalSeconds, 2.0);
+    }
+
+    [Fact]
+    public async Task AttemptCount_ResetsToOne_WhenSourceChanged()
+    {
+        var fixedInstant = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        var (sut, sniffer, naming, integrity, metadata) = MakeFakeTimeSut(new FakeTimeProvider(fixedInstant));
+        var ucPath = await MakeUcFileAsync("42.uc");
+
+        // Prior marker is deep into the series (attempt 3) but recorded a DIFFERENT
+        // SourceSize than the current 4-byte file -> a fresh series (attempt 1).
+        var info = new FileInfo(ucPath);
+        SeedPriorMarker(
+            "42",
+            MarkerStatus.MetadataFetchFailed,
+            attemptCount: 3,
+            sourceSize: info.Length + 1000,
+            sourceMtime: new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero));
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Fallback("metadata-fetch-failed"));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null, It.IsAny<string?>()))
+              .Returns("42.flac");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "42");
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.AttemptCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task AttemptCount_ResetsToOne_WhenStatusClassChanges()
+    {
+        var fixedInstant = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        var (sut, sniffer, naming, integrity, metadata) = MakeFakeTimeSut(new FakeTimeProvider(fixedInstant));
+        var ucPath = await MakeUcFileAsync("42.uc");
+
+        // Prior failure was a DIFFERENT class (MetadataEmpty, attempt 2); the current
+        // failure is MetadataFetchFailed -> a new series begins at attempt 1.
+        var info = new FileInfo(ucPath);
+        SeedPriorMarker(
+            "42",
+            MarkerStatus.MetadataEmpty,
+            attemptCount: 2,
+            sourceSize: info.Length,
+            sourceMtime: new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero));
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Fallback("metadata-fetch-failed"));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null, It.IsAny<string?>()))
+              .Returns("42.flac");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "42");
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.AttemptCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task AttemptCount_ResolvedMarker_IsNull()
+    {
+        var (sut, _, sniffer, naming, integrity, _, metadata, _) = MakeMockedSut();
+        var ucPath = await MakeUcFileAsync("42.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Success(new SongInfo(42, "T", new[] { "A" })));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
+              .Returns("A - T.flac");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions() with { WriteTags = false });
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "42");
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.Status.Should().Be(MarkerStatus.Resolved);
+        marker.AttemptCount.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RateLimited_HonorsServerRetryAfter_EndToEnd()
+    {
+        // On attempt 1 the rate-limited ladder rung is 30s, but the server stated a
+        // 5m Retry-After. The marker's RetryAfter must honor the larger (server) wait.
+        var fixedInstant = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        var (sut, sniffer, naming, integrity, metadata) = MakeFakeTimeSut(new FakeTimeProvider(fixedInstant));
+        var ucPath = await MakeUcFileAsync("42.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Fallback("metadata-rate-limited") { ServerRetryAfter = TimeSpan.FromMinutes(5) });
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, (SongInfo?)null, It.IsAny<string?>()))
+              .Returns("42.flac");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "42");
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.Status.Should().Be(MarkerStatus.MetadataRateLimited);
+        marker.AttemptCount.Should().Be(1);
+        // Server's 5m wins over the attempt-1 rung (30s).
+        var actualDelay = (marker.RetryAfter!.Value - marker.ResolvedAt).TotalSeconds;
+        actualDelay.Should().BeApproximately(TimeSpan.FromMinutes(5).TotalSeconds, 2.0);
+    }
 }

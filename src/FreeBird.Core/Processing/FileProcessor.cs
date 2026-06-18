@@ -206,7 +206,8 @@ public sealed class FileProcessor : IFileProcessor
                         MapToMarkerStatus(resolution),
                         options.NamingTemplate,
                         tagWriteStatus: null,
-                        tagWriteReason: null);
+                        tagWriteReason: null,
+                        serverRetryAfter: (resolution as MetadataResolution.Fallback)?.ServerRetryAfter);
                     _markerSerializer.WriteAtomic(options.OutputDirectory, skipMarker);
                 }
 
@@ -306,7 +307,8 @@ public sealed class FileProcessor : IFileProcessor
                     MapToMarkerStatus(resolution),
                     options.NamingTemplate,
                     tagWriteStatus,
-                    tagWriteReason);
+                    tagWriteReason,
+                    serverRetryAfter: (resolution as MetadataResolution.Fallback)?.ServerRetryAfter);
                 _markerSerializer.WriteAtomic(options.OutputDirectory, marker);
             }
 
@@ -507,7 +509,8 @@ public sealed class FileProcessor : IFileProcessor
         MarkerStatus status,
         string namingTemplate,
         string? tagWriteStatus,
-        string? tagWriteReason)
+        string? tagWriteReason,
+        TimeSpan? serverRetryAfter)
     {
         long sourceSize;
         DateTimeOffset sourceMtime;
@@ -533,11 +536,21 @@ public sealed class FileProcessor : IFileProcessor
             sourceMtime = DateTimeOffset.UnixEpoch;
         }
 
+        // T5: attempt-aware ladder. Resolved markers carry no retry, so AttemptCount
+        // stays null. For a failure status we read the prior marker (if any) for the
+        // SAME stem and continue the series when the failure class AND source are
+        // unchanged; any change resets the series to attempt 1.
+        var outputDir = Path.GetDirectoryName(finalPath)!;
+        int? attemptCount = status == MarkerStatus.Resolved
+            ? null
+            : ComputeAttemptCount(outputDir, sourceStem, status, sourceSize, sourceMtime);
+
         var resolvedAt = _timeProvider.GetUtcNow();
-        // T3: attempt-aware ladder. FileProcessor does not yet read prior-attempt
-        // count (T5) or a server Retry-After (T4); a first-failure marker uses the
-        // first rung (attemptCount: 1, serverRetryAfter: null) as the placeholder.
-        var retry = ResolutionMarkerRetry.For(status, attemptCount: 1, serverRetryAfter: null);
+        // T5: drive the ladder with the real per-source attempt count and any
+        // server-stated Retry-After (rate-limited responses only). Resolved markers
+        // pass attemptCount 1 here purely as a sentinel — For(...) returns null for
+        // Resolved regardless, so no retry window is recorded.
+        var retry = ResolutionMarkerRetry.For(status, attemptCount ?? 1, serverRetryAfter);
         DateTimeOffset? retryAfter = retry.HasValue ? resolvedAt + retry.Value : null;
 
         string? reason = status switch
@@ -568,6 +581,45 @@ public sealed class FileProcessor : IFileProcessor
             RetryAfter = retryAfter,
             TagWriteStatus = tagWriteStatus,
             TagWriteReason = tagWriteReason,
+            AttemptCount = attemptCount,
         };
+    }
+
+    /// <summary>
+    /// Computes the 1-based attempt count for a failure marker by reading the prior
+    /// marker (if any) for the same source stem. The series CONTINUES (prior + 1)
+    /// only when the prior marker recorded the SAME failure class AND the source is
+    /// unchanged; a different status class or a changed source RESETS the series to 1.
+    /// </summary>
+    /// <remarks>
+    /// Source-unchanged is judged by <see cref="ResolutionMarker.SourceSize"/> as the
+    /// primary signal plus a ±2s tolerance on <see cref="ResolutionMarker.SourceMtime"/>.
+    /// Exact mtime equality is avoided because cross-OS / JSON round-tripping can shave
+    /// sub-second precision; size + coarse mtime is a robust same-file proof here.
+    /// </remarks>
+    private int ComputeAttemptCount(
+        string outputDir,
+        string sourceStem,
+        MarkerStatus newStatus,
+        long currentSourceSize,
+        DateTimeOffset currentSourceMtime)
+    {
+        var priorPath = ResolutionMarkerSerializer.MarkerPath(outputDir, sourceStem);
+        if (!_markerSerializer.TryRead(priorPath, out var prior) || prior is null)
+        {
+            return 1;
+        }
+
+        var sameFailureClass = prior.Status == newStatus;
+        var sourceUnchanged =
+            prior.SourceSize == currentSourceSize
+            && Math.Abs((prior.SourceMtime - currentSourceMtime).TotalSeconds) <= 2;
+
+        if (sameFailureClass && sourceUnchanged)
+        {
+            return (prior.AttemptCount ?? 1) + 1;
+        }
+
+        return 1;
     }
 }

@@ -28,5 +28,14 @@ public abstract record MetadataResolution
     /// <c>.freebird-failed</c> sidecar entry.
     /// </summary>
     /// <param name="SidecarReason">Short machine-readable reason code (e.g. "api-not-found", "offline-mode", "api-timeout").</param>
-    public sealed record Fallback(string SidecarReason) : MetadataResolution;
+    public sealed record Fallback(string SidecarReason) : MetadataResolution
+    {
+        /// <summary>
+        /// Server-stated minimum wait (from a rate-limit Retry-After header, already
+        /// clamped at the parse site). <c>null</c> unless this is a rate-limited
+        /// fallback that carried the header. Additive init-only member so existing
+        /// <c>new Fallback("...")</c> call sites keep compiling unchanged.
+        /// </summary>
+        public TimeSpan? ServerRetryAfter { get; init; }
+    }
 }
