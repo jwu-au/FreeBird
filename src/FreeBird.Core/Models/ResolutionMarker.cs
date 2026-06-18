@@ -207,21 +207,127 @@ public static class ResolutionMarkerJson
 }
 
 /// <summary>
-/// Per-<see cref="MarkerStatus"/> retry backoff table (D4 in the design spec).
+/// Per-<see cref="MarkerStatus"/> retry backoff schedule (D4 in the design spec).
 /// </summary>
+/// <remarks>
+/// The schedule has four categories:
+/// <list type="bullet">
+/// <item>
+/// <description>
+/// <b>Transient connectivity</b> (<see cref="MarkerStatus.MetadataFetchFailed"/>):
+/// climbs the exponential <see cref="TransientNetworkLadder"/> {1m, 5m, 15m, 1h, 6h}
+/// by attempt and caps at 6h. Models the boot scenario where the network is briefly
+/// unavailable; <paramref name="serverRetryAfter"/> is ignored.
+/// </description>
+/// </item>
+/// <item>
+/// <description>
+/// <b>Rate-limited / risk-controlled</b> (<see cref="MarkerStatus.MetadataRateLimited"/>):
+/// climbs the exponential <see cref="RateLimitedLadder"/> {30s, 2m, 10m, 30m, 2h} by
+/// attempt (cap 2h), then takes the LARGER of that rung and any server-provided
+/// <paramref name="serverRetryAfter"/> — we never undercut the server's stated wait.
+/// </description>
+/// </item>
+/// <item>
+/// <description>
+/// <b>Genuine not-found</b> (<see cref="MarkerStatus.MetadataEmpty"/>): a flat 7 days,
+/// regardless of attempt or <paramref name="serverRetryAfter"/>.
+/// </description>
+/// </item>
+/// <item>
+/// <description>
+/// <b>Malformed / undecodable</b> (<see cref="MarkerStatus.MetadataDeserializeFailed"/>):
+/// a flat 24 hours, regardless of attempt or <paramref name="serverRetryAfter"/>.
+/// </description>
+/// </item>
+/// </list>
+/// <para>
+/// Ladder indexing is 1-based on <paramref name="attemptCount"/>: attempt 1 maps to
+/// rung 0, attempt 2 to rung 1, and so on; attempts beyond the ladder length pin to
+/// the last rung (the cap). An <paramref name="attemptCount"/> below 1 is clamped to 1.
+/// </para>
+/// <para>
+/// This is a pure function (no clock, no IO). The 6h clamp on a parsed server
+/// Retry-After is applied upstream at the parse site, not here.
+/// </para>
+/// </remarks>
 public static class ResolutionMarkerRetry
 {
     /// <summary>
+    /// Exponential backoff rungs for transient connectivity failures
+    /// (<see cref="MarkerStatus.MetadataFetchFailed"/>), indexed 1-based by attempt
+    /// and capped at the final rung (6h).
+    /// </summary>
+    private static readonly TimeSpan[] TransientNetworkLadder =
+    {
+        TimeSpan.FromMinutes(1),
+        TimeSpan.FromMinutes(5),
+        TimeSpan.FromMinutes(15),
+        TimeSpan.FromHours(1),
+        TimeSpan.FromHours(6),
+    };
+
+    /// <summary>
+    /// Exponential backoff rungs for rate-limited / risk-controlled failures
+    /// (<see cref="MarkerStatus.MetadataRateLimited"/>), indexed 1-based by attempt
+    /// and capped at the final rung (2h). A server Retry-After, when present, can
+    /// only extend (never shorten) the chosen rung.
+    /// </summary>
+    private static readonly TimeSpan[] RateLimitedLadder =
+    {
+        TimeSpan.FromSeconds(30),
+        TimeSpan.FromMinutes(2),
+        TimeSpan.FromMinutes(10),
+        TimeSpan.FromMinutes(30),
+        TimeSpan.FromHours(2),
+    };
+
+    /// <summary>
     /// Returns the minimum delay before a re-attempt is permitted for the given
     /// status, or <c>null</c> when the status is <see cref="MarkerStatus.Resolved"/>
-    /// (no retry needed).
+    /// (no retry needed). See the type remarks for the full four-category schedule.
     /// </summary>
-    public static TimeSpan? For(MarkerStatus status) => status switch
+    /// <param name="status">The recorded outcome to compute a backoff for.</param>
+    /// <param name="attemptCount">
+    /// 1-based count of consecutive failures for this source (1 = first failure).
+    /// Values below 1 are clamped to 1; values beyond the ladder length pin to the cap.
+    /// </param>
+    /// <param name="serverRetryAfter">
+    /// A server-provided minimum wait, meaningful only for
+    /// <see cref="MarkerStatus.MetadataRateLimited"/>; <c>null</c> otherwise. When
+    /// present, the result is the larger of the ladder rung and this value.
+    /// </param>
+    public static TimeSpan? For(MarkerStatus status, int attemptCount, TimeSpan? serverRetryAfter) => status switch
     {
         MarkerStatus.Resolved => null,
-        MarkerStatus.MetadataFetchFailed => TimeSpan.FromHours(1),
+        MarkerStatus.MetadataFetchFailed => Rung(TransientNetworkLadder, attemptCount),
+        MarkerStatus.MetadataRateLimited => MaxWith(Rung(RateLimitedLadder, attemptCount), serverRetryAfter),
         MarkerStatus.MetadataEmpty => TimeSpan.FromDays(7),
         MarkerStatus.MetadataDeserializeFailed => TimeSpan.FromHours(24),
         _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Unknown MarkerStatus."),
     };
+
+    /// <summary>
+    /// Selects the ladder rung for a 1-based <paramref name="attemptCount"/>, clamping
+    /// below-1 attempts to the first rung and beyond-length attempts to the last (cap).
+    /// </summary>
+    private static TimeSpan Rung(TimeSpan[] ladder, int attemptCount)
+    {
+        var index = Math.Clamp(attemptCount - 1, 0, ladder.Length - 1);
+        return ladder[index];
+    }
+
+    /// <summary>
+    /// Returns the larger of <paramref name="ladderValue"/> and an optional
+    /// <paramref name="serverRetryAfter"/> — never undercutting a server-stated wait.
+    /// </summary>
+    private static TimeSpan MaxWith(TimeSpan ladderValue, TimeSpan? serverRetryAfter)
+    {
+        if (serverRetryAfter is { } server && server > ladderValue)
+        {
+            return server;
+        }
+
+        return ladderValue;
+    }
 }

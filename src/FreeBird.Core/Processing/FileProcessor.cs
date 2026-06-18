@@ -533,7 +533,10 @@ public sealed class FileProcessor : IFileProcessor
         }
 
         var resolvedAt = _timeProvider.GetUtcNow();
-        var retry = ResolutionMarkerRetry.For(status);
+        // T3: attempt-aware ladder. FileProcessor does not yet read prior-attempt
+        // count (T5) or a server Retry-After (T4); a first-failure marker uses the
+        // first rung (attemptCount: 1, serverRetryAfter: null) as the placeholder.
+        var retry = ResolutionMarkerRetry.For(status, attemptCount: 1, serverRetryAfter: null);
         DateTimeOffset? retryAfter = retry.HasValue ? resolvedAt + retry.Value : null;
 
         string? reason = status switch

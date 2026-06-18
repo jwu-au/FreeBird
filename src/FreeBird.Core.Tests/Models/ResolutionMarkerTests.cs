@@ -98,25 +98,112 @@ public class ResolutionMarkerTests
     [Fact]
     public void RetryDelayFor_Resolved_ReturnsNull()
     {
-        Assert.Null(ResolutionMarkerRetry.For(MarkerStatus.Resolved));
+        Assert.Null(ResolutionMarkerRetry.For(MarkerStatus.Resolved, attemptCount: 1, serverRetryAfter: null));
     }
 
     [Fact]
-    public void RetryDelayFor_MetadataFetchFailed_Returns1Hour()
+    public void RetryDelayFor_MetadataFetchFailed_FirstAttempt_Returns1Minute()
     {
-        Assert.Equal(TimeSpan.FromHours(1), ResolutionMarkerRetry.For(MarkerStatus.MetadataFetchFailed));
+        // T3: fetch-failed is now an exponential-by-attempt ladder {1m,5m,15m,1h,6h}.
+        // First failure (attempt 1) is the shortest rung; the old flat-1h value is now
+        // ladder[3] (the 4th attempt). serverRetryAfter is ignored for this status.
+        Assert.Equal(
+            TimeSpan.FromMinutes(1),
+            ResolutionMarkerRetry.For(MarkerStatus.MetadataFetchFailed, attemptCount: 1, serverRetryAfter: null));
+        Assert.Equal(
+            TimeSpan.FromMinutes(5),
+            ResolutionMarkerRetry.For(MarkerStatus.MetadataFetchFailed, attemptCount: 2, serverRetryAfter: null));
+        Assert.Equal(
+            TimeSpan.FromHours(6),
+            ResolutionMarkerRetry.For(MarkerStatus.MetadataFetchFailed, attemptCount: 99, serverRetryAfter: null));
     }
 
     [Fact]
     public void RetryDelayFor_MetadataEmpty_Returns7Days()
     {
-        Assert.Equal(TimeSpan.FromDays(7), ResolutionMarkerRetry.For(MarkerStatus.MetadataEmpty));
+        Assert.Equal(
+            TimeSpan.FromDays(7),
+            ResolutionMarkerRetry.For(MarkerStatus.MetadataEmpty, attemptCount: 1, serverRetryAfter: null));
     }
 
     [Fact]
     public void RetryDelayFor_MetadataDeserializeFailed_Returns24Hours()
     {
-        Assert.Equal(TimeSpan.FromHours(24), ResolutionMarkerRetry.For(MarkerStatus.MetadataDeserializeFailed));
+        Assert.Equal(
+            TimeSpan.FromHours(24),
+            ResolutionMarkerRetry.For(MarkerStatus.MetadataDeserializeFailed, attemptCount: 1, serverRetryAfter: null));
+    }
+
+    // T3: fetch-failed climbs the exponential ladder {1m,5m,15m,1h,6h} by 1-based
+    // attempt and stays pinned at the 6h cap once the ladder is exhausted.
+    [Fact]
+    public void Backoff_FetchFailed_ExponentialByAttempt()
+    {
+        Assert.Equal(TimeSpan.FromMinutes(1), ResolutionMarkerRetry.For(MarkerStatus.MetadataFetchFailed, 1, null));
+        Assert.Equal(TimeSpan.FromMinutes(5), ResolutionMarkerRetry.For(MarkerStatus.MetadataFetchFailed, 2, null));
+        Assert.Equal(TimeSpan.FromMinutes(15), ResolutionMarkerRetry.For(MarkerStatus.MetadataFetchFailed, 3, null));
+        Assert.Equal(TimeSpan.FromHours(1), ResolutionMarkerRetry.For(MarkerStatus.MetadataFetchFailed, 4, null));
+        Assert.Equal(TimeSpan.FromHours(6), ResolutionMarkerRetry.For(MarkerStatus.MetadataFetchFailed, 5, null));
+        Assert.Equal(TimeSpan.FromHours(6), ResolutionMarkerRetry.For(MarkerStatus.MetadataFetchFailed, 99, null));
+    }
+
+    // T3: rate-limited climbs its own base ladder {30s,2m,10m,30m,2h} by 1-based
+    // attempt and caps at 2h (with no server Retry-After in play).
+    [Fact]
+    public void Backoff_RateLimited_ExponentialByAttempt()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(30), ResolutionMarkerRetry.For(MarkerStatus.MetadataRateLimited, 1, null));
+        Assert.Equal(TimeSpan.FromMinutes(2), ResolutionMarkerRetry.For(MarkerStatus.MetadataRateLimited, 2, null));
+        Assert.Equal(TimeSpan.FromMinutes(10), ResolutionMarkerRetry.For(MarkerStatus.MetadataRateLimited, 3, null));
+        Assert.Equal(TimeSpan.FromMinutes(30), ResolutionMarkerRetry.For(MarkerStatus.MetadataRateLimited, 4, null));
+        Assert.Equal(TimeSpan.FromHours(2), ResolutionMarkerRetry.For(MarkerStatus.MetadataRateLimited, 5, null));
+        Assert.Equal(TimeSpan.FromHours(2), ResolutionMarkerRetry.For(MarkerStatus.MetadataRateLimited, 99, null));
+    }
+
+    // T3: when the server states a Retry-After larger than the ladder rung, honor it
+    // — never re-hammer the server before its stated wait elapses.
+    [Fact]
+    public void Backoff_RateLimited_HonorsServerRetryAfter_WhenLarger()
+    {
+        // attempt 1 ladder rung is 30s; server says 5m -> server wins.
+        Assert.Equal(
+            TimeSpan.FromMinutes(5),
+            ResolutionMarkerRetry.For(MarkerStatus.MetadataRateLimited, 1, TimeSpan.FromMinutes(5)));
+    }
+
+    // T3: when the server's Retry-After is smaller than the ladder rung, the ladder
+    // wins — we never undercut our own escalating backoff.
+    [Fact]
+    public void Backoff_RateLimited_IgnoresServerRetryAfter_WhenSmaller()
+    {
+        // attempt 5 ladder rung is 2h; server says 1m -> ladder wins.
+        Assert.Equal(
+            TimeSpan.FromHours(2),
+            ResolutionMarkerRetry.For(MarkerStatus.MetadataRateLimited, 5, TimeSpan.FromMinutes(1)));
+    }
+
+    // T3: terminal statuses are flat — attemptCount and serverRetryAfter are ignored.
+    [Fact]
+    public void Backoff_TerminalStatuses_IgnoreAttemptAndRetryAfter()
+    {
+        Assert.Equal(
+            TimeSpan.FromDays(7),
+            ResolutionMarkerRetry.For(MarkerStatus.MetadataEmpty, 99, TimeSpan.FromDays(365)));
+        Assert.Equal(
+            TimeSpan.FromHours(24),
+            ResolutionMarkerRetry.For(MarkerStatus.MetadataDeserializeFailed, 99, TimeSpan.FromDays(365)));
+    }
+
+    // T3: a zero or negative attemptCount is clamped to the first rung (1-based ladder).
+    [Fact]
+    public void Backoff_AttemptCountClampedToOne_WhenZeroOrNegative()
+    {
+        Assert.Equal(
+            TimeSpan.FromMinutes(1),
+            ResolutionMarkerRetry.For(MarkerStatus.MetadataFetchFailed, 0, null));
+        Assert.Equal(
+            TimeSpan.FromMinutes(1),
+            ResolutionMarkerRetry.For(MarkerStatus.MetadataFetchFailed, -3, null));
     }
 
     [Fact]

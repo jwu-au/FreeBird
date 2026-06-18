@@ -214,8 +214,11 @@ public class MetadataE2ETests
             marker!.Status.Should().Be(MarkerStatus.MetadataFetchFailed);
             marker.Reason.Should().Be("metadata-fetch-failed");
             marker.RetryAfter.Should().NotBeNull();
+            // T3: fetch-failed is now an attempt-aware ladder {1m,5m,15m,1h,6h}.
+            // FileProcessor writes a first-failure marker (attemptCount: 1), so the
+            // first re-attempt window is 1m — not the old flat 1h.
             (marker.RetryAfter!.Value - marker.ResolvedAt).TotalSeconds
-                .Should().BeApproximately(TimeSpan.FromHours(1).TotalSeconds, 2.0);
+                .Should().BeApproximately(TimeSpan.FromMinutes(1).TotalSeconds, 2.0);
         }
         finally
         {

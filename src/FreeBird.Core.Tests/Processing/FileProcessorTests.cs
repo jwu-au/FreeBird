@@ -1195,8 +1195,11 @@ public class FileProcessorTests : IDisposable
     }
 
     [Fact]
-    public async Task ProcessAsync_MetadataFetchFailed_WritesMarkerWith1hRetry()
+    public async Task ProcessAsync_MetadataFetchFailed_WritesMarkerWith1MinuteRetry()
     {
+        // T3: fetch-failed is now an attempt-aware ladder {1m,5m,15m,1h,6h}.
+        // FileProcessor writes a first-failure marker (attemptCount: 1), so the
+        // re-attempt window is the first rung (1m) — not the old flat 1h.
         var (sut, _, sniffer, naming, integrity, _, metadata, _) = MakeMockedSut();
         var ucPath = await MakeUcFileAsync("42.uc");
 
@@ -1217,7 +1220,7 @@ public class FileProcessorTests : IDisposable
         marker!.Status.Should().Be(MarkerStatus.MetadataFetchFailed);
         marker.Reason.Should().Be("metadata-fetch-failed");
         var actualDelay = (marker.RetryAfter!.Value - marker.ResolvedAt).TotalSeconds;
-        actualDelay.Should().BeApproximately(TimeSpan.FromHours(1).TotalSeconds, 2.0);
+        actualDelay.Should().BeApproximately(TimeSpan.FromMinutes(1).TotalSeconds, 2.0);
     }
 
     [Fact]
