@@ -33,6 +33,7 @@ public sealed class FileProcessor : IFileProcessor
     private readonly ResolutionMarkerSerializer _markerSerializer;
     private readonly IOutputPathMutexPool _outputMutexPool;
     private readonly ILogger _logger;
+    private readonly TimeProvider _timeProvider;
 
     public FileProcessor(
         IXorDecoder decoder,
@@ -44,7 +45,8 @@ public sealed class FileProcessor : IFileProcessor
         ITagWriter tagWriter,
         ResolutionMarkerSerializer markerSerializer,
         IOutputPathMutexPool outputMutexPool,
-        ILogger logger)
+        ILogger logger,
+        TimeProvider timeProvider)
     {
         _decoder = decoder ?? throw new ArgumentNullException(nameof(decoder));
         _sniffer = sniffer ?? throw new ArgumentNullException(nameof(sniffer));
@@ -56,6 +58,7 @@ public sealed class FileProcessor : IFileProcessor
         _markerSerializer = markerSerializer ?? throw new ArgumentNullException(nameof(markerSerializer));
         _outputMutexPool = outputMutexPool ?? throw new ArgumentNullException(nameof(outputMutexPool));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     }
 
     public async Task<ScanResult> ProcessAsync(
@@ -529,7 +532,7 @@ public sealed class FileProcessor : IFileProcessor
             sourceMtime = DateTimeOffset.UnixEpoch;
         }
 
-        var resolvedAt = DateTimeOffset.Now;
+        var resolvedAt = _timeProvider.GetUtcNow();
         var retry = ResolutionMarkerRetry.For(status);
         DateTimeOffset? retryAfter = retry.HasValue ? resolvedAt + retry.Value : null;
 

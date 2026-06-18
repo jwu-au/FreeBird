@@ -14,6 +14,7 @@ using FreeBird.Core.Processing;
 using FreeBird.Core.Provisioning;
 using FreeBird.Core.Sidecar;
 using FreeBird.Core.Watch;
+using Microsoft.Extensions.Time.Testing;
 using Moq;
 using Serilog;
 using Fx = FreeBird.Core.Tests.Fixtures.Fixtures;
@@ -98,7 +99,7 @@ public class FileProcessorTests : IDisposable
         // v3.4 T12: FileProcessor now requires an IOutputPathMutexPool. Tests use the
         // real OutputPathMutexPool (cheap, in-process) so the wiring is exercised end-to-end.
         var mutexPool = new OutputPathMutexPool();
-        var sut = new FileProcessor(decoder.Object, sniffer.Object, naming.Object, integrity.Object, writer.Object, metadata.Object, tagWriter.Object, markerSerializer, mutexPool, logger);
+        var sut = new FileProcessor(decoder.Object, sniffer.Object, naming.Object, integrity.Object, writer.Object, metadata.Object, tagWriter.Object, markerSerializer, mutexPool, logger, TimeProvider.System);
         return (sut, decoder, sniffer, naming, integrity, writer, metadata, tagWriter);
     }
 
@@ -339,17 +340,19 @@ public class FileProcessorTests : IDisposable
         var l = new Mock<ILogger>().Object;
         var ms = new ResolutionMarkerSerializer(l);
         var mp = new OutputPathMutexPool();
+        var tp = TimeProvider.System;
 
-        ((Action)(() => _ = new FileProcessor(null!, s, n, i, w, m, t, ms, mp, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, null!, n, i, w, m, t, ms, mp, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, null!, i, w, m, t, ms, mp, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, n, null!, w, m, t, ms, mp, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, n, i, null!, m, t, ms, mp, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, null!, t, ms, mp, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, null!, ms, mp, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, t, null!, mp, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, t, ms, null!, l))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, t, ms, mp, null!))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(null!, s, n, i, w, m, t, ms, mp, l, tp))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, null!, n, i, w, m, t, ms, mp, l, tp))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, null!, i, w, m, t, ms, mp, l, tp))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, null!, w, m, t, ms, mp, l, tp))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, null!, m, t, ms, mp, l, tp))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, null!, t, ms, mp, l, tp))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, null!, ms, mp, l, tp))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, t, null!, mp, l, tp))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, t, ms, null!, l, tp))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, t, ms, mp, null!, tp))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, t, ms, mp, l, null!))).Should().Throw<ArgumentNullException>();
     }
 
     // --- INTEGRATION test: real fixtures + real decoder/sniffer/naming/writer, mocked composite ---
@@ -381,7 +384,8 @@ public class FileProcessorTests : IDisposable
             new Mock<ITagWriter>().Object,
             new ResolutionMarkerSerializer(logger),
             new OutputPathMutexPool(),
-            logger);
+            logger,
+            TimeProvider.System);
 
         // v3.0.1: Offline=true mirrors the mocked Fallback("offline-mode") resolver
         // and suppresses the JSON marker write (the marker invariant is "offline-mode
@@ -1133,6 +1137,61 @@ public class FileProcessorTests : IDisposable
         var actualDelay = (marker.RetryAfter!.Value - marker.ResolvedAt).TotalSeconds;
         var expectedDelay = TimeSpan.FromDays(7).TotalSeconds;
         actualDelay.Should().BeApproximately(expectedDelay, 2.0);
+    }
+
+    [Fact]
+    public async Task MarkerBuild_UsesInjectedTimeProvider()
+    {
+        // T1 determinism: the marker's ResolvedAt must come from the injected
+        // TimeProvider, NOT the ambient wall clock. We pin a FakeTimeProvider to a
+        // known instant, drive the marker-build path, and assert ResolvedAt matches.
+        var fixedInstant = new DateTimeOffset(2021, 1, 2, 3, 4, 5, TimeSpan.Zero);
+        var fakeTime = new FakeTimeProvider(fixedInstant);
+
+        var decoder = new Mock<IXorDecoder>();
+        var sniffer = new Mock<IFormatSniffer>();
+        var naming = new Mock<IFileNamer>();
+        var integrity = new Mock<ICompositeIntegrityChecker>();
+        var writer = new Mock<IAtomicFileWriter>();
+        var metadata = new Mock<IMetadataResolver>();
+        var tagWriter = new Mock<ITagWriter>();
+
+        writer.Setup(w => w.WriteAsync(It.IsAny<string>(), It.IsAny<Func<Stream, CancellationToken, Task>>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+              .Returns<string, Func<Stream, CancellationToken, Task>, bool, CancellationToken>(async (path, callback, _, ct) =>
+              {
+                  Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                  await using var fs = File.Create(path);
+                  await callback(fs, ct);
+              });
+        decoder.Setup(d => d.DecodeAsync(It.IsAny<Stream>(), It.IsAny<Stream>(), It.IsAny<CancellationToken>()))
+               .Returns<Stream, Stream, CancellationToken>(async (_, output, ct) =>
+               {
+                   await output.WriteAsync(new byte[] { 1, 2, 3, 4 }, ct);
+               });
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Flac);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Success(new SongInfo(0, "Stub", new[] { "Stub" })));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Flac, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
+              .Returns("42.flac");
+
+        var logger = new Mock<ILogger>().Object;
+        var markerSerializer = new ResolutionMarkerSerializer(logger);
+        var mutexPool = new OutputPathMutexPool();
+        var sut = new FileProcessor(
+            decoder.Object, sniffer.Object, naming.Object, integrity.Object,
+            writer.Object, metadata.Object, tagWriter.Object, markerSerializer,
+            mutexPool, logger, fakeTime);
+
+        var ucPath = await MakeUcFileAsync("42.uc");
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions());
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "42");
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.ResolvedAt.Should().Be(fixedInstant);
     }
 
     [Fact]

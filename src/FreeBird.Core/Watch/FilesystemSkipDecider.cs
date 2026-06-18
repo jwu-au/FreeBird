@@ -32,15 +32,18 @@ public sealed class FilesystemSkipDecider : ISkipDecider
     private readonly ISidecarReader _sidecarReader;
     private readonly ResolutionMarkerSerializer _markerSerializer;
     private readonly ILogger _logger;
+    private readonly TimeProvider _timeProvider;
 
     public FilesystemSkipDecider(
         ISidecarReader sidecarReader,
         ResolutionMarkerSerializer markerSerializer,
-        ILogger logger)
+        ILogger logger,
+        TimeProvider timeProvider)
     {
         _sidecarReader = sidecarReader ?? throw new ArgumentNullException(nameof(sidecarReader));
         _markerSerializer = markerSerializer ?? throw new ArgumentNullException(nameof(markerSerializer));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     }
 
     public async Task<SkipDecision> DecideAsync(
@@ -277,9 +280,9 @@ public sealed class FilesystemSkipDecider : ISkipDecider
         // Retry gate (D4) — only applies to non-Resolved statuses with non-null RetryAfter.
         if (marker.Status != MarkerStatus.Resolved
             && marker.RetryAfter is not null
-            && DateTimeOffset.Now >= marker.RetryAfter.Value)
+            && _timeProvider.GetUtcNow() >= marker.RetryAfter.Value)
         {
-            var elapsed = DateTimeOffset.Now - marker.RetryAfter.Value;
+            var elapsed = _timeProvider.GetUtcNow() - marker.RetryAfter.Value;
             _logger.Information(
                 "marker retry-after elapsed ({Status}, retried after {Duration}): re-processing {SourcePath}",
                 marker.Status, elapsed, sourcePath);

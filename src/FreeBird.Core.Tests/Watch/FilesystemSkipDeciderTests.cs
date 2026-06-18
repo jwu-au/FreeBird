@@ -7,6 +7,7 @@ using FreeBird.Core.Models;
 using FreeBird.Core.Processing;
 using FreeBird.Core.Sidecar;
 using FreeBird.Core.Watch;
+using Microsoft.Extensions.Time.Testing;
 using Moq;
 using Serilog;
 using Serilog.Core;
@@ -70,10 +71,10 @@ public sealed class FilesystemSkipDeciderTests : IDisposable
         => new(NullLogger());
 
     private static FilesystemSkipDecider WithRealReader()
-        => new(new TextSidecarReader(), NewMarkerSerializer(), NullLogger());
+        => new(new TextSidecarReader(), NewMarkerSerializer(), NullLogger(), TimeProvider.System);
 
     private static FilesystemSkipDecider WithMockReader(Mock<ISidecarReader> mock)
-        => new(mock.Object, NewMarkerSerializer(), NullLogger());
+        => new(mock.Object, NewMarkerSerializer(), NullLogger(), TimeProvider.System);
 
     private static string WriteV2Sidecar(
         string failedDir,
@@ -376,21 +377,28 @@ public sealed class FilesystemSkipDeciderTests : IDisposable
     [Fact]
     public void Constructor_NullSidecarReader_Throws()
     {
-        ((Action)(() => _ = new FilesystemSkipDecider(null!, NewMarkerSerializer(), NullLogger())))
+        ((Action)(() => _ = new FilesystemSkipDecider(null!, NewMarkerSerializer(), NullLogger(), TimeProvider.System)))
             .Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
     public void Constructor_NullMarkerSerializer_Throws()
     {
-        ((Action)(() => _ = new FilesystemSkipDecider(new TextSidecarReader(), null!, NullLogger())))
+        ((Action)(() => _ = new FilesystemSkipDecider(new TextSidecarReader(), null!, NullLogger(), TimeProvider.System)))
             .Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
     public void Constructor_NullLogger_Throws()
     {
-        ((Action)(() => _ = new FilesystemSkipDecider(new TextSidecarReader(), NewMarkerSerializer(), null!)))
+        ((Action)(() => _ = new FilesystemSkipDecider(new TextSidecarReader(), NewMarkerSerializer(), null!, TimeProvider.System)))
+            .Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void Constructor_NullTimeProvider_Throws()
+    {
+        ((Action)(() => _ = new FilesystemSkipDecider(new TextSidecarReader(), NewMarkerSerializer(), NullLogger(), null!)))
             .Should().Throw<ArgumentNullException>();
     }
 
@@ -437,7 +445,7 @@ public sealed class FilesystemSkipDeciderTests : IDisposable
         var loggerMock = new Mock<ILogger>();
         loggerMock.Setup(l => l.Information(It.IsAny<string>(), It.IsAny<object?[]>()))
                   .Callback<string, object?[]>((tpl, _) => logged.Add(tpl));
-        var sut = new FilesystemSkipDecider(new TextSidecarReader(), NewMarkerSerializer(), loggerMock.Object);
+        var sut = new FilesystemSkipDecider(new TextSidecarReader(), NewMarkerSerializer(), loggerMock.Object, TimeProvider.System);
 
         var decision = await sut.DecideAsync(src, opts);
 
@@ -546,7 +554,7 @@ public sealed class FilesystemSkipDeciderTests : IDisposable
             .WriteTo.Sink(sink)
             .CreateLogger();
         var readerSerializer = new ResolutionMarkerSerializer(deciderLogger);
-        var sut = new FilesystemSkipDecider(new TextSidecarReader(), readerSerializer, deciderLogger);
+        var sut = new FilesystemSkipDecider(new TextSidecarReader(), readerSerializer, deciderLogger, TimeProvider.System);
 
         var decision = await sut.DecideAsync(src, opts);
 
@@ -613,6 +621,55 @@ public sealed class FilesystemSkipDeciderTests : IDisposable
         decision.ShouldProcess.Should().BeFalse();
         decision.Reason.Should().Be(SkipReason.SourceUnchangedSinceFailure);
         decision.Detail.Should().Contain(sidecarPath);
+    }
+
+    [Fact]
+    public async Task SkipDecider_RetryGate_UsesInjectedTimeProvider()
+    {
+        // T1 determinism: the retry gate must read 'now' from the injected
+        // TimeProvider, NOT the ambient wall clock. Build a marker with
+        // RetryAfter = T; with the fake clock at T-1s the gate must NOT fire
+        // (Skip); advance to T+1s and the gate fires (re-process).
+        var root = NewTempDir();
+        var src = CreateSource(root, "3367798042-_-_5999.uc!", 4096);
+        var info = new FileInfo(src);
+        var mtime = new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero);
+        var opts = OptionsFor(root, minSize: 1);
+
+        var retryAfter = new DateTimeOffset(2030, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        const string outputName = "3367798042.flac";
+        File.WriteAllBytes(Path.Combine(opts.OutputDir, outputName), new byte[] { 0xFF });
+
+        var marker = new ResolutionMarker
+        {
+            Schema = 1,
+            SourceStem = "3367798042-_-_5999",
+            MusicId = "3367798042",
+            SourcePath = src,
+            SourceSize = info.Length,
+            SourceMtime = mtime,
+            ResolvedAt = retryAfter - TimeSpan.FromHours(1),
+            Status = MarkerStatus.MetadataFetchFailed,
+            OutputName = outputName,
+            Format = "Flac",
+            Integrity = "L3",
+            NamingTemplate = opts.NamingTemplate,
+            Reason = "metadata-fetch-failed",
+            RetryAfter = retryAfter,
+        };
+        NewMarkerSerializer().WriteAtomic(opts.OutputDir, marker);
+
+        // Before RetryAfter — gate must NOT fire → Skip.
+        var clockBefore = new FakeTimeProvider(retryAfter - TimeSpan.FromSeconds(1));
+        var sutBefore = new FilesystemSkipDecider(new TextSidecarReader(), NewMarkerSerializer(), NullLogger(), clockBefore);
+        var decisionBefore = await sutBefore.DecideAsync(src, opts, CancellationToken.None);
+        decisionBefore.ShouldProcess.Should().BeFalse("retry window has not elapsed per the injected clock");
+
+        // After RetryAfter — gate fires → re-process.
+        var clockAfter = new FakeTimeProvider(retryAfter + TimeSpan.FromSeconds(1));
+        var sutAfter = new FilesystemSkipDecider(new TextSidecarReader(), NewMarkerSerializer(), NullLogger(), clockAfter);
+        var decisionAfter = await sutAfter.DecideAsync(src, opts, CancellationToken.None);
+        decisionAfter.ShouldProcess.Should().BeTrue("retry window has elapsed per the injected clock");
     }
 
     /// <summary>Tiny in-memory Serilog sink for assertions on log output.</summary>

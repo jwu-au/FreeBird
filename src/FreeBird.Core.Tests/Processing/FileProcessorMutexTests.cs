@@ -67,7 +67,7 @@ public sealed class FileProcessorMutexTests : IDisposable
         var l = new Mock<ILogger>().Object;
         var ms = new ResolutionMarkerSerializer(l);
 
-        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, t, ms, null!, l)))
+        ((Action)(() => _ = new FileProcessor(d, s, n, i, w, m, t, ms, null!, l, TimeProvider.System)))
             .Should().Throw<ArgumentNullException>().WithParameterName("outputMutexPool");
     }
 
@@ -254,7 +254,7 @@ public sealed class FileProcessorMutexTests : IDisposable
         var sut = new FileProcessor(
             decoder.Object, sniffer.Object, naming.Object, integrity.Object,
             writer.Object, metadata.Object, tagWriter.Object, markerSerializer,
-            mutex, logger);
+            mutex, logger, TimeProvider.System);
 
         return (sut, sniffer, naming, integrity, writer, metadata,
                 mutex, () => mutex.AcquireCount, () => mutex.ReleaseCount);
@@ -309,7 +309,7 @@ public sealed class FileProcessorMutexTests : IDisposable
         var sut = new FileProcessor(
             decoder.Object, sniffer.Object, naming.Object, integrity.Object,
             writer.Object, metadata.Object, tagWriter.Object, markerSerializer,
-            pool, logger);
+            pool, logger, TimeProvider.System);
 
         return (sut, sniffer, naming, integrity);
     }
