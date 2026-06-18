@@ -99,7 +99,14 @@ public class LogPathResolverTests
         result.FinalPath.Should().EndWith(ProgramDataLogSuffix);
         result.FinalPath.Should().NotBe(requested);
         result.Reason.Should().NotBeNull();
-        result.Reason.Should().Contain("/does/not/exist",
+
+        // The resolver names the missing directory using the injected filesystem's own
+        // Path API, so the separator style is OS-dependent (forward slashes on Unix,
+        // backslashes on Windows where MockFileSystem normalises them). Derive the
+        // expected directory through the same API instead of hard-coding separators,
+        // so the assertion checks the *intent* (the directory is named) portably.
+        var expectedDir = fs.Path.GetDirectoryName(requested);
+        result.Reason.Should().Contain(expectedDir!,
             "the fallback reason must name the missing directory for operator diagnosis");
     }
 

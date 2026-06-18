@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Rolling daily file logs** in service mode at `%ProgramData%\FreeBird\logs\watch-YYYY-MM-DD.log`, with automatic fallback to the ProgramData default when a configured `log_file` is unwritable.
 - **Admin elevation + service-account support**: `--service-account` / `--service-password` (or `FB_SERVICE_PASSWORD`), with a LocalSystem-vs-user-profile-path warning.
 
+### Fixed
+- **`fb service` config path**: the `%ProgramData%` token in the default config path is now expanded before use, so `install`, `run`, `start`, `stop`, `restart`, `status`, and `init` all resolve to the real `C:\ProgramData\FreeBird\config.json` instead of failing with `Config file not found: %ProgramData%\FreeBird\config.json`. Env-variable tokens (e.g. `%USERPROFILE%`) in a user-supplied `--config` / `--output` are also expanded.
+
 ### Documentation
 - README 'Running as a Windows Service' section + macOS launchd / Linux systemd power-user snippets + platform support matrix.
 

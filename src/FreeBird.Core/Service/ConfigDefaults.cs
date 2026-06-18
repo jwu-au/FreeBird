@@ -3,7 +3,7 @@ namespace FreeBird.Core.Service;
 /// <summary>
 /// Default values for the JSON service config, matching design §2.7.
 /// Strings use the literal <c>%ProgramData%</c> token — expansion is the host's job
-/// (see <c>LogPathResolver</c> in T13b).
+/// (the Cli-side log-path resolver expands it at service start).
 /// </summary>
 public static class ConfigDefaults
 {

@@ -20,8 +20,9 @@ namespace FreeBird.Cli.Commands.Service;
 /// <summary>
 /// T22 — Windows-only host body for <see cref="RunCommand.RunHostAsync"/>. Compiled on Windows
 /// only (see FreeBird.Cli.csproj); it references the Windows-only
-/// <see cref="WindowsServiceLifetimeHostBuilderExtensions.UseWindowsService(IHostBuilder)"/> and
-/// the EventLog Serilog sink, which are restored on Windows alone.
+/// <c>IServiceCollection.AddWindowsService()</c> (from
+/// <see cref="WindowsServiceLifetimeHostBuilderExtensions"/>) and the EventLog Serilog sink,
+/// which are restored on Windows alone.
 ///
 /// <para>Autofac → MS.DI bridge: the watch pipeline is registered in Autofac
 /// (<see cref="ServiceHostBuilder.BuildContainer(ILogger, RootConfig)"/>), so we build that
@@ -80,7 +81,10 @@ public static partial class RunCommand
         builder.Services.AddSingleton(supervisor);
         builder.Services.AddSingleton(config);
         builder.Services.AddHostedService<WatchHostedService>();
-        builder.UseWindowsService();
+        // HostApplicationBuilder (from Host.CreateApplicationBuilder) exposes Windows-service
+        // hosting via Services.AddWindowsService(); the legacy UseWindowsService() lives on
+        // IHostBuilder (Host.CreateDefaultBuilder) and is not available on this builder.
+        builder.Services.AddWindowsService();
 
         var host = builder.Build();
         try

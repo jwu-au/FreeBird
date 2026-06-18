@@ -15,6 +15,13 @@
     -->
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.9" />
     <PackageReference Include="Serilog" Version="4.3.1" />
+    <!--
+      T22: bridges the Serilog root logger into the generic host's
+      Microsoft.Extensions.Logging pipeline via AddSerilog(ILoggingBuilder). The
+      extension lives in this package; it is OS-agnostic (the Windows host body that
+      consumes it is itself Windows-only), so it stays in the cross-OS group.
+    -->
+    <PackageReference Include="Serilog.Extensions.Logging" Version="10.0.0" />
     <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
     <PackageReference Include="System.CommandLine" Version="3.0.0-preview.4.26230.115" />
@@ -34,6 +41,15 @@
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.9" />
     <PackageReference Include="Serilog.Sinks.EventLog" Version="4.0.0" />
     <PackageReference Include="System.ServiceProcess.ServiceController" Version="10.0.9" />
+    <!--
+      T22: RunCommand.RunHostAsync / IsRunningAsWindowsService are partial methods whose
+      real Windows body lives in RunCommand.Windows.cs (compiled here). The non-Windows
+      fallback RunCommand.NonWindows.cs ALSO implements those same partials, so it must be
+      excluded on Windows — otherwise both files supply an implementing declaration and the
+      Windows build fails with CS0757. (The mirror exclusion of RunCommand.Windows.cs on
+      non-Windows lives in the !Windows ItemGroup below.)
+    -->
+    <Compile Remove="Commands/Service/RunCommand.NonWindows.cs" />
   </ItemGroup>
 
   <!--

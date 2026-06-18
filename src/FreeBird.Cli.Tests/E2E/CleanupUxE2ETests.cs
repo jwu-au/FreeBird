@@ -68,8 +68,9 @@ public class CleanupUxE2ETests : IDisposable
 
         var outPath = Path.Combine(_outputDir, "song.mp3");
 
-        // 1) Wait up to 5s for initial sweep to produce the output.
-        var initiallyAppeared = await WatchE2EHelpers.WaitForFileAsync(outPath, TimeSpan.FromSeconds(5));
+        // 1) Wait up to 20s for initial sweep to produce the output (5s proved flaky on
+        //    loaded Windows CI; a longer budget returns as soon as the file appears).
+        var initiallyAppeared = await WatchE2EHelpers.WaitForFileAsync(outPath, TimeSpan.FromSeconds(20));
         initiallyAppeared.Should().BeTrue("initial sweep should produce song.mp3");
 
         // 2) Record original mtime, then delete the output.
@@ -77,13 +78,14 @@ public class CleanupUxE2ETests : IDisposable
         File.Delete(outPath);
         File.Exists(outPath).Should().BeFalse("we just deleted it");
 
-        // 3) Wait up to 4s for the next poll cycle to redecode. Mtime resolution on macOS
-        // APFS is sub-millisecond; on some Linux/Windows filesystems it's 1-2s, so we ALSO
-        // wait until the mtime strictly advances past the original (handles same-second
-        // filesystem timestamp granularity).
+        // 3) Wait up to 15s for the next poll cycle (1s interval) to redecode. Mtime
+        // resolution on macOS APFS is sub-millisecond; on some Linux/Windows filesystems
+        // it's 1-2s, so we ALSO wait until the mtime strictly advances past the original
+        // (handles same-second filesystem timestamp granularity). 15s (not 4s) absorbs
+        // loaded-CI latency; the poll returns as soon as the mtime advances.
         var redecoded = await WatchE2EHelpers.WaitForAsync(
             () => File.Exists(outPath) && File.GetLastWriteTimeUtc(outPath) > originalMtime,
-            TimeSpan.FromSeconds(4));
+            TimeSpan.FromSeconds(15));
 
         cts.Cancel();
         try { await runTask; } catch (OperationCanceledException) { /* expected */ }

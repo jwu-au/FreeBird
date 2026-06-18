@@ -92,8 +92,11 @@ public class WatchMultiInputE2ETests : IDisposable
         var runTask = WatchE2EHelpers.StartWatchAsync(opts, cts.Token);
 
         // Both files should appear within ~5s (initial sweep at +0, both decode together).
-        var seen1 = await WatchE2EHelpers.WaitForFileAsync(expected1, TimeSpan.FromSeconds(5));
-        var seen2 = await WatchE2EHelpers.WaitForFileAsync(expected2, TimeSpan.FromSeconds(5));
+        // 20s (not 5s): the watch poll interval is 500ms and decode+atomic-move can be
+        // slow on loaded Windows CI runners. A longer timeout returns immediately once
+        // the file appears, so it only adds latency on genuine failures — de-flakes CI.
+        var seen1 = await WatchE2EHelpers.WaitForFileAsync(expected1, TimeSpan.FromSeconds(20));
+        var seen2 = await WatchE2EHelpers.WaitForFileAsync(expected2, TimeSpan.FromSeconds(20));
 
         seen1.Should().BeTrue($"watch must decode the file in dir1 → {expected1}");
         seen2.Should().BeTrue($"watch must decode the file in dir2 → {expected2}");
@@ -126,7 +129,7 @@ public class WatchMultiInputE2ETests : IDisposable
         using var cts = new CancellationTokenSource();
         var runTask = WatchE2EHelpers.StartWatchAsync(opts, cts.Token);
 
-        var seen = await WatchE2EHelpers.WaitForFileAsync(expected, TimeSpan.FromSeconds(5));
+        var seen = await WatchE2EHelpers.WaitForFileAsync(expected, TimeSpan.FromSeconds(20));
         seen.Should().BeTrue(
             "the valid input dir must still be watched + processed despite a born-DEAD sibling");
 

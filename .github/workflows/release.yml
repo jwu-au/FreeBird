@@ -33,15 +33,15 @@ jobs:
             ext: tar.gz
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
@@ -86,7 +86,7 @@ jobs:
           [ -f LICENSE ] && cp LICENSE "$STAGE/" || true
           tar czf "freebird-${{ steps.ver.outputs.version }}-${{ matrix.rid }}.tar.gz" -C "$STAGE" .
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: freebird-${{ steps.ver.outputs.version }}-${{ matrix.rid }}
           path: "freebird-${{ steps.ver.outputs.version }}-${{ matrix.rid }}.${{ matrix.ext }}"
@@ -95,11 +95,11 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: artifacts
           merge-multiple: true

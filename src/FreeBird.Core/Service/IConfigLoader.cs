@@ -2,7 +2,7 @@ namespace FreeBird.Core.Service;
 
 /// <summary>
 /// Parses + validates the JSON service config file used by <c>fb service install</c>
-/// into a typed <see cref="RootConfig"/> graph (T05).
+/// into a typed <see cref="RootConfig"/> graph.
 ///
 /// <para>
 /// Implementations are synchronous and fail-fast: any parse error, missing required
@@ -12,9 +12,10 @@ namespace FreeBird.Core.Service;
 /// </para>
 ///
 /// <para>
-/// NOTE: this interface intentionally does NOT inherit <c>IDependency</c> yet.
-/// DI registration is deferred to T14 (CliServiceModule), which decides whether
-/// IConfigLoader gets bound via Core auto-scan or explicit Cli registration.
+/// NOTE: this interface intentionally does NOT inherit <c>IDependency</c>, so it is
+/// never picked up by the Core auto-scan. The Cli constructs it explicitly
+/// (<c>new JsonConfigLoader(logger)</c>) at the point of use rather than resolving it
+/// from the container.
 /// </para>
 /// </summary>
 public interface IConfigLoader

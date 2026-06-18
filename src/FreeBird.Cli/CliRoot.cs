@@ -274,8 +274,11 @@ public static class CliRoot
             {
                 return 1;
             }
+            // Expand any env tokens (e.g. %ProgramData%, %USERPROFILE%) in --output, and
+            // fall back to the expanded ProgramData default when --output is omitted, so
+            // `init` writes to the same real path that install/run later read from.
             return InitCommand.Handle(
-                parseResult.GetValue(outputOpt),
+                ServiceConfigPath.Resolve(parseResult.GetValue(outputOpt)),
                 parseResult.GetValue(forceOpt),
                 new FileSystem(),
                 Console.Out,
@@ -297,7 +300,7 @@ public static class CliRoot
             using var container = ServiceHostBuilder.BuildContainer(logger);
             using var scope = container.BeginLifetimeScope();
             var args = new InstallArgs(
-                parseResult.GetValue(configOpt)!,
+                ServiceConfigPath.Resolve(parseResult.GetValue(configOpt)),
                 parseResult.GetValue(serviceAccountOpt),
                 parseResult.GetValue(servicePasswordOpt));
             return await InstallCommand.HandleAsync(
@@ -443,7 +446,7 @@ public static class CliRoot
         runCmd.Hidden = true;
         runCmd.SetAction(async (parseResult, ct) =>
             await RunCommand.HandleAsync(
-                parseResult.GetValue(configOpt)!,
+                ServiceConfigPath.Resolve(parseResult.GetValue(configOpt)),
                 RunCommand.IsRunningAsWindowsService,
                 Console.Out,
                 Console.Error,
