@@ -5,6 +5,18 @@ All notable changes to FreeBird are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.1] — 2026-06-19
+
+### Fixed
+- **Windows flac auto-download now works for `scan` / `watch`**, not just `install-flac`. Previously the auto-installer was only reachable via `fb install-flac`; `scan`/`watch` defaulted the install URL to null, so on Windows `--integrity auto` silently fell back to L1 and `--integrity l3` failed even though the (SHA-pinned) download path existed. FreeBird now auto-downloads the official `flac` binaries on Windows when none is found; macOS/Linux are unchanged (a hint to install via `brew`/`apt` is shown). `--no-auto-download` / `FREEBIRD_NO_AUTO_DOWNLOAD` still disable it.
+
+### Changed
+- **License is now MIT** (`LICENSE` added).
+- **README rewritten for general users** (simple-to-deep structure; implementation detail folded into collapsible sections). Contributor/architecture docs moved to `CONTRIBUTING.md`.
+
+### Documentation
+- Added an Information-level `Signal handlers ready.` log in watch/service mode once OS signal handlers are installed — a useful readiness signal for service operators.
+
 ## [3.5.0] — 2026-06-19
 
 ### Added
