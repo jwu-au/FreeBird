@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -13,42 +12,55 @@ public sealed class TokenBucketRateLimiterTests
     [Fact]
     public async Task Unlimited_AcquireReturnsImmediately()
     {
-        // callsPerSecond == 0 means unlimited / no throttling.
-        using var limiter = new TokenBucketRateLimiter(callsPerSecond: 0);
+        // callsPerSecond == 0 means unlimited / no throttling. Deterministic: with a
+        // FakeTimeProvider that is NEVER advanced, every acquire must still complete.
+        // If the unlimited fast-path were broken (i.e. it tried to wait for a refill),
+        // these acquires would block forever on virtual time and the test would hang.
+        var fake = new FakeTimeProvider(startDateTime: DateTimeOffset.UtcNow);
+        using var limiter = new TokenBucketRateLimiter(callsPerSecond: 0, timeProvider: fake);
 
-        var sw = Stopwatch.StartNew();
         for (var i = 0; i < 1000; i++)
         {
-            await limiter.AcquireAsync(CancellationToken.None);
+            var acquire = limiter.AcquireAsync(CancellationToken.None);
+            acquire.IsCompleted.Should().BeTrue(
+                "an unlimited limiter must complete synchronously without consulting the clock");
+            await acquire;
         }
-        sw.Stop();
-
-        sw.ElapsedMilliseconds.Should().BeLessThan(100,
-            "unlimited limiter must not introduce per-call latency");
     }
 
     [Fact]
     public async Task Limited_RespectsRate()
     {
-        // capacity == callsPerSecond == 5; burst of 5 should succeed instantly,
-        // 6th should wait ~200ms (1 token / 5 per second = 200ms).
-        using var limiter = new TokenBucketRateLimiter(callsPerSecond: 5);
+        // capacity == callsPerSecond == 5; a burst of 5 succeeds instantly, the 6th must
+        // wait for a refill. Deterministic: drive virtual time so the 6th acquire cannot
+        // complete until exactly the refill interval (1 token / 5 cps = 200ms) elapses.
+        var fake = new FakeTimeProvider(startDateTime: DateTimeOffset.UtcNow);
+        using var limiter = new TokenBucketRateLimiter(callsPerSecond: 5, timeProvider: fake);
 
-        // Drain the initial bucket.
+        // Drain the initial bucket (these complete synchronously — tokens are available).
         for (var i = 0; i < 5; i++)
         {
-            await limiter.AcquireAsync(CancellationToken.None);
+            var burst = limiter.AcquireAsync(CancellationToken.None);
+            burst.IsCompleted.Should().BeTrue("the initial burst of 5 tokens is available immediately");
+            await burst;
         }
 
-        var sw = Stopwatch.StartNew();
-        await limiter.AcquireAsync(CancellationToken.None);
-        sw.Stop();
+        // The 6th acquire must block until a token refills.
+        var sixth = limiter.AcquireAsync(CancellationToken.None).AsTask();
+        // Give the limiter a chance to schedule its virtual-time delay, then assert it
+        // is still waiting because no virtual time has passed.
+        await Task.Yield();
+        sixth.IsCompleted.Should().BeFalse("no time has elapsed, so the 6th token has not refilled");
 
-        sw.ElapsedMilliseconds.Should().BeGreaterThanOrEqualTo(150,
-            "the 6th acquire must wait for a refill (~200ms)");
-        sw.ElapsedMilliseconds.Should().BeLessThan(2000,
-            "the wait should not be excessive (generous upper bound to absorb CI scheduling jitter; "
-            + "this still catches a stuck/never-refilling limiter)");
+        // Just under the refill interval: still blocked.
+        fake.Advance(TimeSpan.FromMilliseconds(199));
+        await Task.Yield();
+        sixth.IsCompleted.Should().BeFalse("199ms < the 200ms refill interval, so the token is not yet available");
+
+        // Reaching the full refill interval releases the 6th acquire.
+        fake.Advance(TimeSpan.FromMilliseconds(1));
+        await sixth.WaitAsync(TimeSpan.FromSeconds(5));
+        sixth.IsCompletedSuccessfully.Should().BeTrue("after a full 200ms refill the 6th acquire completes");
     }
 
     [Fact]
@@ -66,27 +78,29 @@ public sealed class TokenBucketRateLimiterTests
         // Advance time by 1 second — bucket should refill to capacity (5 tokens).
         fake.Advance(TimeSpan.FromSeconds(1));
 
-        // Five more acquires should now all complete immediately.
-        var sw = Stopwatch.StartNew();
+        // Five more acquires should now all complete synchronously (tokens available).
         for (var i = 0; i < 5; i++)
         {
-            await limiter.AcquireAsync(CancellationToken.None);
+            var acquire = limiter.AcquireAsync(CancellationToken.None);
+            acquire.IsCompleted.Should().BeTrue(
+                "after a full second of refill, all 5 tokens are available immediately");
+            await acquire;
         }
-        sw.Stop();
-
-        sw.ElapsedMilliseconds.Should().BeLessThan(100,
-            "after a full second of refill, 5 tokens should be available immediately");
     }
 
     [Fact]
     public async Task AcquireAsync_HonorsCancellation()
     {
-        using var limiter = new TokenBucketRateLimiter(callsPerSecond: 1);
+        var fake = new FakeTimeProvider(startDateTime: DateTimeOffset.UtcNow);
+        using var limiter = new TokenBucketRateLimiter(callsPerSecond: 1, timeProvider: fake);
 
         // Drain the single token.
         await limiter.AcquireAsync(CancellationToken.None);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        // An already-cancelled token must surface OperationCanceledException deterministically,
+        // with no reliance on wall-clock timing.
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
 
         var act = async () => await limiter.AcquireAsync(cts.Token);
 

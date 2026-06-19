@@ -54,7 +54,6 @@ public class DoubleCtrlCE2ETests : IDisposable
         await TestFixtures.WriteFixtureAsUcAsync(TestFixtures.SampleMp3Path, _inputDir, "alpha.uc");
 
         using var child = SpawnFbWatch();
-        var startup = Stopwatch.StartNew();
         // Capture output for diagnostics if the test fails.
         var outBuf = new System.Text.StringBuilder();
         var errBuf = new System.Text.StringBuilder();
@@ -68,12 +67,11 @@ public class DoubleCtrlCE2ETests : IDisposable
         var startedOk = await WatchE2EHelpers.WaitForAsync(
             () => { lock (outBuf) lock (errBuf) { return outBuf.Length + errBuf.Length > 0; } },
             TimeSpan.FromSeconds(10));
-        startup.Stop();
         startedOk.Should().BeTrue(
             $"the fb watch child should emit at least one log line during startup. " +
             $"stdout=[{outBuf}] stderr=[{errBuf}] HasExited={child.HasExited}");
         child.HasExited.Should().BeFalse(
-            $"the fb watch child should still be running at the time we send SIGINT (startup={startup.ElapsedMilliseconds}ms). " +
+            $"the fb watch child should still be running at the time we send SIGINT. " +
             $"ExitCode={(child.HasExited ? child.ExitCode : -1)} stdout=[{outBuf}] stderr=[{errBuf}]");
 
         // Give the orchestrator a moment to install its signal handlers and enter the poll loop
@@ -89,16 +87,13 @@ public class DoubleCtrlCE2ETests : IDisposable
 
         // Graceful drain may take a few seconds (orchestrator finishes its current poll cycle and
         // disposes the file sink). 8s is comfortably above observed graceful-shutdown times.
-        var sw = Stopwatch.StartNew();
         var exited = child.WaitForExit(8000);
-        sw.Stop();
 
         exited.Should().BeTrue(
-            $"the fb watch child should exit within 8s of SIGINT (waited {sw.ElapsedMilliseconds}ms, startup={startup.ElapsedMilliseconds}ms). " +
+            $"the fb watch child should exit within the sentinel timeout of SIGINT. " +
             $"stdout=[{outBuf}] stderr=[{errBuf}]");
         child.ExitCode.Should().Be(130,
             $"single SIGINT → graceful drain → exit code 130 (POSIX SIGINT convention). " +
-            $"drain={sw.ElapsedMilliseconds}ms startup={startup.ElapsedMilliseconds}ms " +
             $"stdout=[{outBuf}] stderr=[{errBuf}]");
 
         // T19-fixup regression guard: a single SIGINT must enter the graceful drain path but
@@ -125,7 +120,6 @@ public class DoubleCtrlCE2ETests : IDisposable
         await TestFixtures.WriteFixtureAsUcAsync(TestFixtures.SampleMp3Path, _inputDir, "alpha.uc");
 
         using var child = SpawnFbWatch();
-        var startup = Stopwatch.StartNew();
         var outBuf = new System.Text.StringBuilder();
         var errBuf = new System.Text.StringBuilder();
         child.OutputDataReceived += (_, e) => { if (e.Data is not null) { lock (outBuf) outBuf.AppendLine(e.Data); } };
@@ -136,12 +130,11 @@ public class DoubleCtrlCE2ETests : IDisposable
         var startedOk = await WatchE2EHelpers.WaitForAsync(
             () => { lock (outBuf) lock (errBuf) { return outBuf.Length + errBuf.Length > 0; } },
             TimeSpan.FromSeconds(10));
-        startup.Stop();
         startedOk.Should().BeTrue(
             $"the fb watch child should emit at least one log line during startup. " +
             $"stdout=[{outBuf}] stderr=[{errBuf}] HasExited={child.HasExited}");
         child.HasExited.Should().BeFalse(
-            $"the fb watch child should still be running at the time we send SIGINT (startup={startup.ElapsedMilliseconds}ms). " +
+            $"the fb watch child should still be running at the time we send SIGINT. " +
             $"ExitCode={(child.HasExited ? child.ExitCode : -1)} stdout=[{outBuf}] stderr=[{errBuf}]");
 
         // Give the orchestrator time to install signal handlers and enter its poll loop.
@@ -155,16 +148,13 @@ public class DoubleCtrlCE2ETests : IDisposable
         SendSigint(child.Id);
 
         // Hard abort should be near-immediate. 5s is generous slack for process cleanup.
-        var sw = Stopwatch.StartNew();
         var exited = child.WaitForExit(5000);
-        sw.Stop();
 
         exited.Should().BeTrue(
-            $"double SIGINT should trigger immediate hard abort within 5s (waited {sw.ElapsedMilliseconds}ms, startup={startup.ElapsedMilliseconds}ms). " +
+            $"double SIGINT should trigger an immediate hard abort within the sentinel timeout. " +
             $"stdout=[{outBuf}] stderr=[{errBuf}]");
         child.ExitCode.Should().Be(130,
             $"double SIGINT → hard abort → exit code 130 (POSIX SIGINT convention). " +
-            $"drain={sw.ElapsedMilliseconds}ms startup={startup.ElapsedMilliseconds}ms " +
             $"stdout=[{outBuf}] stderr=[{errBuf}]");
 
         // T19-fixup regression guard: the first SIGINT must trip the graceful-shutdown log.

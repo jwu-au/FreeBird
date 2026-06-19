@@ -179,16 +179,20 @@ public sealed class WatchSupervisorRuntimeTests : IDisposable
     [Fact]
     public async Task RunAsync_AllTasksRunConcurrently()
     {
-        // Each orchestrator awaits ~200ms; running them serially would take ~600ms.
-        // Parallel fan-out should complete in well under 500ms. The wide gap between
-        // the concurrent floor (~200ms) and this 500ms threshold absorbs scheduling
-        // jitter on busy shared CI runners while still proving the tasks overlapped
-        // (a serial run could not finish in under 600ms). History: a 250ms budget over
-        // 100ms tasks flaked on macOS CI (269ms); a 400ms budget over 200ms tasks then
-        // flaked on Windows CI (440ms); 500ms keeps a clear margin below the 600ms
-        // serial floor while tolerating loaded-runner jitter.
-        const int delayMs = 200;
+        // DETERMINISTIC concurrency proof (no wall-clock timing). Each orchestrator
+        // signals a shared barrier on entry, then blocks on a release gate. If the
+        // supervisor ran tasks serially, only ONE orchestrator would ever enter at a
+        // time, the barrier would never reach zero, and the WaitAsync sentinel below
+        // would time out. Reaching the barrier proves all `count` tasks are running
+        // simultaneously. We then open the gate so they can complete.
         const int count = 3;
+
+        // Counts down as each orchestrator enters its run body.
+        var allEntered = new CountdownEvent(count);
+        // Held closed until we have observed full concurrency, then opened to let the
+        // orchestrators finish.
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
         var tasks = new List<WatchTask>();
         for (int i = 0; i < count; i++)
         {
@@ -197,20 +201,28 @@ public sealed class WatchSupervisorRuntimeTests : IDisposable
             orch.Setup(o => o.RunAsync(It.IsAny<WatchOptions>(), It.IsAny<CancellationToken>(), It.IsAny<CancellationToken>()))
                 .Returns<WatchOptions, CancellationToken, CancellationToken>(async (_, ct, _) =>
                 {
-                    await Task.Delay(delayMs, ct).ConfigureAwait(false);
+                    allEntered.Signal();
+                    await release.Task.WaitAsync(ct).ConfigureAwait(false);
                     return MakeSummary(ok: 1);
                 });
             tasks.Add(MakeTaskWithOrchestrator(dir, orch.Object));
         }
 
         var sup = MakeSupervisor();
-        var sw = Stopwatch.StartNew();
-        var summary = await sup.RunAsync(tasks, MakeOptionsTemplate(NewTempDir()), CancellationToken.None);
-        sw.Stop();
+        var run = sup.RunAsync(tasks, MakeOptionsTemplate(NewTempDir()), CancellationToken.None);
 
+        // Wait for all orchestrators to be running at once. A serial implementation
+        // cannot satisfy this and will trip the sentinel timeout (failing the test).
+        var enteredInTime = allEntered.WaitHandle.WaitOne(TimeSpan.FromSeconds(5));
+        enteredInTime.Should().BeTrue(
+            "all tasks must run concurrently — a serial supervisor would never let all "
+            + $"{count} orchestrators enter their run body at the same time");
+
+        // Full concurrency observed; let them finish.
+        release.SetResult();
+
+        var summary = await run.WaitAsync(TimeSpan.FromSeconds(5));
         summary.Ok.Should().Be(count);
-        sw.ElapsedMilliseconds.Should().BeLessThan(500,
-            "parallel fan-out should run all 3 tasks concurrently (serial would need ~600ms)");
     }
 
     // ---- Test 7 ----

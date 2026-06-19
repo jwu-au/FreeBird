@@ -249,18 +249,33 @@ public sealed class NetEaseApiClientDualGateTests
     [Fact]
     public async Task GetSongDetail_TimeoutDuringRateWait_ReturnsTimeoutResult()
     {
-        // Real rate limiter, rate=1 cps, capacity already consumed before the
-        // call we measure so the second acquire must wait ~1s. We set timeout
-        // to 100ms so the linked CTS fires first.
-        using var rate = new TokenBucketRateLimiter(callsPerSecond: 1);
-        await using var sem = new GlobalApiRateLimiter(maxConcurrency: 4);
+        // DETERMINISTIC: a mocked rate limiter whose AcquireAsync blocks until the
+        // passed-in token is cancelled, then surfaces OperationCanceledException.
+        // The client's per-request timeout (linked CTS, 100ms) is what cancels that
+        // token, so the wait is broken by the TIMEOUT, not by wall-clock token refill.
+        // This removes the previous real-clock race (a real rate=1 limiter occasionally
+        // refilled within the 100ms window on fast/loaded Windows runners, letting the
+        // request succeed before the timeout fired -> flaky Success instead of Timeout).
+        var rate = new Mock<ITokenBucketRateLimiter>();
+        rate.Setup(r => r.AcquireAsync(It.IsAny<CancellationToken>()))
+            .Returns<CancellationToken>(async token =>
+            {
+                // Wait forever until the (timeout-linked) token is cancelled.
+                var tcs = new TaskCompletionSource();
+                using var reg = token.Register(() => tcs.TrySetResult());
+                await tcs.Task.ConfigureAwait(false);
+                token.ThrowIfCancellationRequested();
+            });
 
-        // Drain the bucket so the SUT call has to wait for a refill.
-        await rate.AcquireAsync(CancellationToken.None);
+        // The concurrency gate is never reached (the rate gate wait is cancelled by the
+        // timeout first), but provide a benign slot so the mock is well-formed.
+        var sem = Mock.Of<IGlobalApiRateLimiter>(s =>
+            s.AcquireAsync(It.IsAny<CancellationToken>())
+                == ValueTask.FromResult<IDisposable>(Mock.Of<IDisposable>()));
 
         var handler = new CapturingHandler((_, _) => Task.FromResult(Ok()));
 
-        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), rate, sem, TimeProvider.System);
+        var sut = new NetEaseApiClient(BuildClient(handler), NullLogger(), rate.Object, sem, TimeProvider.System);
 
         var result = await sut.GetSongDetailAsync(
             42L,
