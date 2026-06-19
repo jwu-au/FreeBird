@@ -255,7 +255,8 @@ The config file is JSON, validated against the schema shipped at `schemas/servic
 
 - **LocalSystem can't read user-profile paths.** The default service account (`LocalSystem`) cannot read user-profile locations like `%LocalAppData%\NetEase\...`. If your cache lives under a user profile, install with `--service-account <DOMAIN\user>` so the service runs as an identity that can read those files — a **gMSA** (group Managed Service Account) is recommended.
 - **Service-account password.** Pass `--service-password` or set the `FB_SERVICE_PASSWORD` environment variable at install time. Rotate per your org policy and re-run `fb service install` afterwards.
-- **Logs.** The service writes a rolling daily file at `%ProgramData%\FreeBird\logs\watch-YYYY-MM-DD.log`, and also emits to the Windows **Event Log** (source `FreeBird`, under the Application log).
+- **Logs.** The service writes a rolling daily file at `%ProgramData%\FreeBird\logs\watch-YYYY-MM-DD.log` containing the full detail (`Information` and above). The Windows **Event Log** (source `FreeBird`, under the Application log) receives only **`Error` and above** — actionable failures — so routine warnings don't clutter Event Viewer. To diagnose a warning, check the file log.
+- **A file is named `<number>.mp3` instead of `Artist - Title.mp3`.** Metadata lookup was temporarily unavailable (no network at startup, or NetEase rate-limited / risk-controlled the request — often from an overseas/cloud IP). FreeBird decodes immediately under a fallback name and **retries metadata automatically** with backoff: transient network errors retry quickly (minutes), rate-limiting backs off more gently (and honours the server's `Retry-After`). Once metadata succeeds the file is renamed correctly and the old fallback file is cleaned up. Genuine "song not in NetEase" results are retried far less often (weekly).
 
 ### macOS & Linux (power users)
 

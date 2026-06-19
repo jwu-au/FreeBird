@@ -5,7 +5,7 @@ All notable changes to FreeBird are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.5.0] — 2026-06-17
+## [3.5.0] — 2026-06-19
 
 ### Added
 - **Windows Service mode**: new `fb service` subcommand tree — `init`, `install`, `uninstall`, `start`, `stop`, `restart`, `status` (7 visible) plus a hidden `run` SCM entrypoint. Registers FreeBird as a native Windows Service that wraps the `fb watch` pipeline.
@@ -13,12 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Windows Event Log integration**: service writes to the `FreeBird` source in the Application log; source created on install, removed on uninstall.
 - **Rolling daily file logs** in service mode at `%ProgramData%\FreeBird\logs\watch-YYYY-MM-DD.log`, with automatic fallback to the ProgramData default when a configured `log_file` is unwritable.
 - **Admin elevation + service-account support**: `--service-account` / `--service-password` (or `FB_SERVICE_PASSWORD`), with a LocalSystem-vs-user-profile-path warning.
+- **Attempt-aware metadata retry backoff**: failed metadata lookups now climb an exponential, per-source schedule instead of a flat wait. Transient connectivity errors retry fast (1m → 5m → 15m → 1h → 6h) so a service that starts before the network is up recovers quickly; rate-limited responses back off more gently (30s → 2m → 10m → 30m → 2h) and honour a server `Retry-After` header (clamped to 6h).
+- **Stale fallback cleanup**: when a file first decoded under a fallback name (`<musicId>.<ext>`) is later re-resolved successfully, the correctly-named file is written and the old fallback artifact is removed — but only when it is provably the same untouched FreeBird output (size + mtime + source-freshness checks); otherwise it is kept and logged. A file that is locked/in-use at delete time is kept with a warning.
+- **Resolution marker schema 2**: adds `attempt_count`, `output_size`, `output_mtime` (additive, nullable). Older schema-1 markers still parse unchanged.
 
 ### Fixed
+- **NetEase rate-limit / risk-control no longer mistaken for “not found”**: the API client now inspects the response body `code` (and HTTP status), so a throttled / geo-blocked reply (`HTTP 200 {code:-460,"Cheating"}` / `-447`, or HTTP 429/403/5xx) is classified as *rate-limited* and retried with backoff, instead of being treated as a genuine empty result and cold-stored for 7 days. Genuine not-found (HTTP 200, success code, no songs) is still 7 days; malformed/unknown responses are 24h.
 - **`fb service` config path**: the `%ProgramData%` token in the default config path is now expanded before use, so `install`, `run`, `start`, `stop`, `restart`, `status`, and `init` all resolve to the real `C:\ProgramData\FreeBird\config.json` instead of failing with `Config file not found: %ProgramData%\FreeBird\config.json`. Env-variable tokens (e.g. `%USERPROFILE%`) in a user-supplied `--config` / `--output` are also expanded.
 
 ### Documentation
 - README 'Running as a Windows Service' section + macOS launchd / Linux systemd power-user snippets + platform support matrix.
+
+### Changed
+- **Windows Event Log is now Error-only**: the service’s Event Log sink was raised from `Warning` to `Error`, so the Windows Application log shows only actionable failures. Warnings remain in the rolling file log at `%ProgramData%\FreeBird\logs`.
 
 **No breaking changes.** `fb scan`, `fb watch`, and `fb install-flac` are unchanged.
 
