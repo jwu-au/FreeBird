@@ -127,7 +127,11 @@ public static class ScanRunner
                 flacUrl,
                 noAutoDownload,
                 Environment.GetEnvironmentVariable("FREEBIRD_FLAC_URL"),
-                Environment.GetEnvironmentVariable("FREEBIRD_NO_AUTO_DOWNLOAD"));
+                Environment.GetEnvironmentVariable("FREEBIRD_NO_AUTO_DOWNLOAD"),
+                // Windows auto-downloads flac when none is found (matching `install-flac`);
+                // macOS/Linux pass null so the resolver stays a NoOp and the user is told to
+                // install flac via brew/apt.
+                defaultUrl: OperatingSystem.IsWindows() ? InstallFlacRunner.DefaultUrl : null);
 
             await using var container = BuildContainer(logger, flacOptions);
             await using var scope = container.BeginLifetimeScope();

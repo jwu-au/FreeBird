@@ -29,16 +29,25 @@ public static class FlacOptionsBinder
     /// <param name="noAutoDownloadFlag">True if --no-auto-download passed.</param>
     /// <param name="envFlacUrl">Value of FREEBIRD_FLAC_URL env (null if unset).</param>
     /// <param name="envNoAutoDownload">Value of FREEBIRD_NO_AUTO_DOWNLOAD env (null if unset).</param>
+    /// <param name="defaultUrl">
+    /// Platform-appropriate fallback download URL used when neither <paramref name="flacUrlFlag"/>
+    /// nor <paramref name="envFlacUrl"/> is set. Callers pass the pinned Xiph ZIP URL on Windows
+    /// (so <c>scan</c>/<c>watch</c> trigger the auto-installer like <c>install-flac</c> does) and
+    /// <c>null</c> on macOS/Linux (where auto-install is a NoOp and the user installs flac via
+    /// their package manager). Keeping it a parameter leaves this helper platform-agnostic.
+    /// </param>
     public static EffectiveFlacOptions Resolve(
         string? flacBinFlag,
         string? flacUrlFlag,
         bool noAutoDownloadFlag,
         string? envFlacUrl,
-        string? envNoAutoDownload)
+        string? envNoAutoDownload,
+        string? defaultUrl = null)
     {
-        // CLI flag wins; fall back to env
+        // CLI flag wins; then env; then the platform default supplied by the caller.
         var url = !string.IsNullOrWhiteSpace(flacUrlFlag) ? flacUrlFlag
                 : !string.IsNullOrWhiteSpace(envFlacUrl) ? envFlacUrl
+                : !string.IsNullOrWhiteSpace(defaultUrl) ? defaultUrl
                 : null;
 
         // --no-auto-download is OR with env (any source saying yes wins)

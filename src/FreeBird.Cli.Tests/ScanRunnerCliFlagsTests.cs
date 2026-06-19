@@ -322,7 +322,17 @@ public class ScanRunnerCliFlagsTests : IDisposable
                 exit.Should().Be(ScanRunner.ExitOk);
                 captured.Should().NotBeNull();
                 captured!.FlacBinOverride.Should().BeNull();
-                captured.AutoInstallUrl.Should().BeNull();
+                // With no --flac-url / env, the effective AutoInstallUrl is platform-dependent:
+                // Windows falls back to the pinned default so auto-download works out of the box;
+                // macOS/Linux stay null (auto-install is a NoOp; the user installs flac via brew/apt).
+                if (OperatingSystem.IsWindows())
+                {
+                    captured.AutoInstallUrl.Should().Be(InstallFlacRunner.DefaultUrl);
+                }
+                else
+                {
+                    captured.AutoInstallUrl.Should().BeNull();
+                }
                 captured.DisableAutoInstall.Should().BeFalse();
                 captured.AppBaseDirectory.Should().NotBeNullOrEmpty();
             }

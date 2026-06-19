@@ -116,7 +116,11 @@ public sealed class WatchRunner
                     cliOptions.FlacUrl,
                     cliOptions.NoAutoDownload,
                     Environment.GetEnvironmentVariable("FREEBIRD_FLAC_URL"),
-                    Environment.GetEnvironmentVariable("FREEBIRD_NO_AUTO_DOWNLOAD"));
+                    Environment.GetEnvironmentVariable("FREEBIRD_NO_AUTO_DOWNLOAD"),
+                    // Windows auto-downloads flac when none is found (matching `install-flac`);
+                    // macOS/Linux pass null so the resolver stays a NoOp and the user is told to
+                    // install flac via brew/apt.
+                    defaultUrl: OperatingSystem.IsWindows() ? InstallFlacRunner.DefaultUrl : null);
 
                 container = BuildContainer(logger, flacOptions);
                 scope = container.BeginLifetimeScope();
@@ -176,6 +180,13 @@ public sealed class WatchRunner
                 // graceful token so an external host CTS still stops the supervisor gracefully.
                 sigintRegistration = SubscribeSigint(coordinator);
                 sigtermRegistration = SubscribeSigterm(coordinator);
+
+                // Readiness marker: emitted only AFTER both signal handlers are installed.
+                // "Watch starting" (logged earlier) fires before this point, so anything that
+                // waits on startup alone can race the handler installation. Tools/tests that
+                // need to deliver a signal should wait for THIS line to guarantee the handler
+                // is in place (prevents the SIGINT-before-handler default-terminate race).
+                logger.Information("Signal handlers ready.");
                 using var linkedGraceful = CancellationTokenSource.CreateLinkedTokenSource(
                     coordinator.Graceful, coordinator.Hard, externalToken);
 

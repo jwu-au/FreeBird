@@ -74,13 +74,17 @@ public class DoubleCtrlCE2ETests : IDisposable
             $"the fb watch child should still be running at the time we send SIGINT. " +
             $"ExitCode={(child.HasExited ? child.ExitCode : -1)} stdout=[{outBuf}] stderr=[{errBuf}]");
 
-        // Give the orchestrator a moment to install its signal handlers and enter the poll loop
-        // (the "Watch starting" log fires BEFORE SubscribeSigint is called). On a busy CI runner
-        // 300ms can be too short — if SIGINT arrives before the handler is installed the process
-        // takes the default-terminate path and never logs "Graceful shutdown requested" (observed
-        // flake on macOS CI). 1500ms gives the handler ample time to install without making the
-        // test meaningfully slower (it still proceeds as soon as the delay elapses).
-        await Task.Delay(1500);
+        // Wait deterministically until the signal handlers are installed. The child logs
+        // "Signal handlers ready." AFTER SubscribeSigint/SubscribeSigterm complete, so once we
+        // see that line a SIGINT cannot land before the handler exists. This replaces the old
+        // fixed Task.Delay(1500), which still raced on busy CI runners (the SIGINT-before-handler
+        // default-terminate path produced a flaky missing "Graceful shutdown requested").
+        var handlersReady = await WatchE2EHelpers.WaitForAsync(
+            () => { lock (outBuf) lock (errBuf) { return (outBuf.ToString() + errBuf.ToString()).Contains("Signal handlers ready."); } },
+            TimeSpan.FromSeconds(10));
+        handlersReady.Should().BeTrue(
+            $"the fb watch child should log 'Signal handlers ready.' once SIGINT/SIGTERM handlers are " +
+            $"installed. stdout=[{outBuf}] stderr=[{errBuf}] HasExited={child.HasExited}");
 
         // Send a single SIGINT. The coordinator's first-signal path is graceful drain.
         SendSigint(child.Id);
@@ -137,8 +141,15 @@ public class DoubleCtrlCE2ETests : IDisposable
             $"the fb watch child should still be running at the time we send SIGINT. " +
             $"ExitCode={(child.HasExited ? child.ExitCode : -1)} stdout=[{outBuf}] stderr=[{errBuf}]");
 
-        // Give the orchestrator time to install signal handlers and enter its poll loop.
-        await Task.Delay(300);
+        // Wait deterministically for the signal handlers to be installed (same race as the
+        // single-SIGINT test: a fixed delay could let the first SIGINT land before the handler
+        // exists). The child logs "Signal handlers ready." after both handlers are wired.
+        var handlersReady = await WatchE2EHelpers.WaitForAsync(
+            () => { lock (outBuf) lock (errBuf) { return (outBuf.ToString() + errBuf.ToString()).Contains("Signal handlers ready."); } },
+            TimeSpan.FromSeconds(10));
+        handlersReady.Should().BeTrue(
+            $"the fb watch child should log 'Signal handlers ready.' before we send SIGINT. " +
+            $"stdout=[{outBuf}] stderr=[{errBuf}] HasExited={child.HasExited}");
 
         // First SIGINT — enters graceful drain mode.
         SendSigint(child.Id);
