@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/jwu-au/FreeBird/actions/workflows/ci.yml/badge.svg)](https://github.com/jwu-au/FreeBird/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/jwu-au/FreeBird)](https://github.com/jwu-au/FreeBird/releases)
-[![License](https://img.shields.io/badge/license-TBD-lightgrey.svg)](#license)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Turn your **NetEase Cloud Music** offline cache into clean, properly named, fully tagged **MP3 / FLAC / M4A** files you can play anywhere.
 
@@ -281,7 +281,7 @@ Bug reports, ideas, and pull requests are welcome. See **[CONTRIBUTING.md](CONTR
 
 ## License
 
-TBD.
+Released under the [MIT License](LICENSE) — © 2026 FreeBird Contributors.
 
 <details>
 <summary>FLAC licensing acknowledgment</summary>
