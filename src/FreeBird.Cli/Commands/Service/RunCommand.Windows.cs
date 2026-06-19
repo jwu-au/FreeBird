@@ -58,7 +58,10 @@ public static partial class RunCommand
                 retainedFileCountLimit: 14,
                 outputTemplate:
                     "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
-            .WriteTo.EventLog(source: "FreeBird", logName: "Application", restrictedToMinimumLevel: LogEventLevel.Warning)
+            // Windows Event Log gets ERROR and above only. Warnings stay in the rolling file log
+            // (C:\\ProgramData\\FreeBird\\logs) to keep the Event Log focused on actionable failures
+            // operators should react to; routine warnings would otherwise spam the Application log.
+            .WriteTo.EventLog(source: "FreeBird", logName: "Application", restrictedToMinimumLevel: LogEventLevel.Error)
             .CreateLogger();
 
         if (resolution.FellBack)
