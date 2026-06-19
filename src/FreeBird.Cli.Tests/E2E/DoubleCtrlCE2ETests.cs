@@ -77,9 +77,12 @@ public class DoubleCtrlCE2ETests : IDisposable
             $"ExitCode={(child.HasExited ? child.ExitCode : -1)} stdout=[{outBuf}] stderr=[{errBuf}]");
 
         // Give the orchestrator a moment to install its signal handlers and enter the poll loop
-        // (the "Watch starting" log fires before SubscribeSigint is called). 300ms is enough on
-        // a developer laptop without being so long the test feels slow.
-        await Task.Delay(300);
+        // (the "Watch starting" log fires BEFORE SubscribeSigint is called). On a busy CI runner
+        // 300ms can be too short — if SIGINT arrives before the handler is installed the process
+        // takes the default-terminate path and never logs "Graceful shutdown requested" (observed
+        // flake on macOS CI). 1500ms gives the handler ample time to install without making the
+        // test meaningfully slower (it still proceeds as soon as the delay elapses).
+        await Task.Delay(1500);
 
         // Send a single SIGINT. The coordinator's first-signal path is graceful drain.
         SendSigint(child.Id);

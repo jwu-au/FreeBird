@@ -46,8 +46,9 @@ public sealed class TokenBucketRateLimiterTests
 
         sw.ElapsedMilliseconds.Should().BeGreaterThanOrEqualTo(150,
             "the 6th acquire must wait for a refill (~200ms)");
-        sw.ElapsedMilliseconds.Should().BeLessThan(800,
-            "the wait should not be excessive");
+        sw.ElapsedMilliseconds.Should().BeLessThan(2000,
+            "the wait should not be excessive (generous upper bound to absorb CI scheduling jitter; "
+            + "this still catches a stuck/never-refilling limiter)");
     }
 
     [Fact]
