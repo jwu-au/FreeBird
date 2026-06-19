@@ -180,11 +180,13 @@ public sealed class WatchSupervisorRuntimeTests : IDisposable
     public async Task RunAsync_AllTasksRunConcurrently()
     {
         // Each orchestrator awaits ~200ms; running them serially would take ~600ms.
-        // Parallel fan-out should complete in well under 400ms. The wide gap between
-        // the concurrent floor (~200ms) and this 400ms threshold absorbs scheduling
+        // Parallel fan-out should complete in well under 500ms. The wide gap between
+        // the concurrent floor (~200ms) and this 500ms threshold absorbs scheduling
         // jitter on busy shared CI runners while still proving the tasks overlapped
-        // (a serial run could not finish in under 600ms). A tighter 250ms budget over
-        // 100ms tasks proved flaky on loaded macOS CI (observed 269ms).
+        // (a serial run could not finish in under 600ms). History: a 250ms budget over
+        // 100ms tasks flaked on macOS CI (269ms); a 400ms budget over 200ms tasks then
+        // flaked on Windows CI (440ms); 500ms keeps a clear margin below the 600ms
+        // serial floor while tolerating loaded-runner jitter.
         const int delayMs = 200;
         const int count = 3;
         var tasks = new List<WatchTask>();
@@ -207,7 +209,7 @@ public sealed class WatchSupervisorRuntimeTests : IDisposable
         sw.Stop();
 
         summary.Ok.Should().Be(count);
-        sw.ElapsedMilliseconds.Should().BeLessThan(400,
+        sw.ElapsedMilliseconds.Should().BeLessThan(500,
             "parallel fan-out should run all 3 tasks concurrently (serial would need ~600ms)");
     }
 
