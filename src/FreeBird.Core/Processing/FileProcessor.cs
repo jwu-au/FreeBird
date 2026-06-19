@@ -301,15 +301,41 @@ public sealed class FileProcessor : IFileProcessor
             //     the invariant that markers only reference real on-disk audio.
             if (!options.Offline)
             {
+                var newStatus = MapToMarkerStatus(resolution);
+
+                // T6 (Part B): capture the PRIOR marker BEFORE overwriting it so a
+                // successful re-resolution can clean up a stale fallback output whose
+                // name differs from the new final name. ComputeAttemptCount only runs
+                // for failure statuses, so the success path reads the prior marker here.
+                ResolutionMarker? priorMarker = null;
+                if (newStatus == MarkerStatus.Resolved)
+                {
+                    var priorPath = ResolutionMarkerSerializer.MarkerPath(options.OutputDirectory, sourceStem);
+                    _markerSerializer.TryRead(priorPath, out priorMarker);
+                }
+
                 var marker = BuildMarker(
                     sourcePath, sourceStem, finalPath, format,
                     integrity.LevelApplied,
-                    MapToMarkerStatus(resolution),
+                    newStatus,
                     options.NamingTemplate,
                     tagWriteStatus,
                     tagWriteReason,
                     serverRetryAfter: (resolution as MetadataResolution.Fallback)?.ServerRetryAfter);
                 _markerSerializer.WriteAtomic(options.OutputDirectory, marker);
+
+                // T6 (Part B): the new resolved file + marker are now both committed.
+                // Best-effort delete of the superseded fallback output happens AFTER
+                // that commit (decision Mi3=Z). Accepted limitation: if the process
+                // dies between the marker write above and this delete, one benign
+                // fallback orphan may remain — never any data loss. Runs while this
+                // worker still holds the finalPath mutex (R3: no extra lock needed).
+                if (newStatus == MarkerStatus.Resolved && priorMarker is not null)
+                {
+                    TryCleanupStaleFallback(
+                        options.OutputDirectory, finalPath, marker.SourceSize, marker.SourceMtime,
+                        priorMarker, File.Delete);
+                }
             }
 
             return new ScanResult(
@@ -536,6 +562,27 @@ public sealed class FileProcessor : IFileProcessor
             sourceMtime = DateTimeOffset.UnixEpoch;
         }
 
+        // T6 (Part A): stat the just-written output so the marker records the
+        // output's on-disk identity (size + mtime). This is what a later
+        // re-resolution uses (C4) to confirm a recorded fallback output still
+        // matches what we wrote before deleting it. Tolerant of IO failures —
+        // both fields stay null and cleanup will conservatively keep the file.
+        long? outputSize = null;
+        DateTimeOffset? outputMtime = null;
+        try
+        {
+            var outInfo = new FileInfo(finalPath);
+            if (outInfo.Exists)
+            {
+                outputSize = outInfo.Length;
+                outputMtime = new DateTimeOffset(outInfo.LastWriteTimeUtc, TimeSpan.Zero);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.Warning(ex, "Failed to stat output file before marker write: {FinalPath}", finalPath);
+        }
+
         // T5: attempt-aware ladder. Resolved markers carry no retry, so AttemptCount
         // stays null. For a failure status we read the prior marker (if any) for the
         // SAME stem and continue the series when the failure class AND source are
@@ -582,6 +629,8 @@ public sealed class FileProcessor : IFileProcessor
             TagWriteStatus = tagWriteStatus,
             TagWriteReason = tagWriteReason,
             AttemptCount = attemptCount,
+            OutputSize = outputSize,
+            OutputMtime = outputMtime,
         };
     }
 
@@ -621,5 +670,101 @@ public sealed class FileProcessor : IFileProcessor
         }
 
         return 1;
+    }
+
+    /// <summary>
+    /// T6: best-effort removal of a stale fallback output that has been superseded
+    /// by a successful re-resolution to a DIFFERENT final name. This is advisory and
+    /// safe — the new resolved file and its marker are always committed BEFORE this
+    /// runs, and the deletion is best-effort: a failure (locked / in-use file) is
+    /// logged and swallowed, never propagated, so decoded audio is never lost.
+    /// </summary>
+    /// <remarks>
+    /// ALL of C1-C7 must hold to delete; any failing gate keeps the file (most
+    /// keep silently; C4 keeps + logs INFO because an on-disk mismatch is worth
+    /// surfacing). The <paramref name="deleteFile"/> seam exists so tests can force
+    /// the final delete to throw on a REAL filesystem where C1-C6 genuinely pass;
+    /// the production call site passes <see cref="File.Delete(string)"/>.
+    /// Identity is judged by SIZE (exact) + MTIME (±2s) — never exact-mtime compare —
+    /// because cross-OS / JSON round-tripping can shave sub-second precision.
+    /// </remarks>
+    internal void TryCleanupStaleFallback(
+        string outputDir,
+        string newFinalPath,
+        long currentSourceSize,
+        DateTimeOffset currentSourceMtime,
+        ResolutionMarker priorMarker,
+        Action<string> deleteFile)
+    {
+        // C1: the prior marker must have been a fallback (not already Resolved).
+        if (priorMarker.Status == MarkerStatus.Resolved)
+        {
+            return;
+        }
+
+        // C2: the prior fallback output name must differ from the new final name;
+        // otherwise the new write overwrote it in place and nothing is orphaned.
+        var newFinalName = Path.GetFileName(newFinalPath);
+        if (string.Equals(priorMarker.OutputName, newFinalName, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        // C3: the prior fallback must have been recorded for THIS source (size exact
+        // + mtime ±2s). A changed source means the old fallback isn't an orphan of
+        // the file we just resolved.
+        var sourceMatches =
+            priorMarker.SourceSize == currentSourceSize
+            && Math.Abs((priorMarker.SourceMtime - currentSourceMtime).TotalSeconds) <= 2;
+        if (!sourceMatches)
+        {
+            return;
+        }
+
+        var oldPath = Path.Combine(outputDir, priorMarker.OutputName);
+
+        // C4: the on-disk old file must still match the identity the marker recorded
+        // (size exact + mtime ±2s). If the user replaced/edited it, KEEP + log INFO —
+        // we must not delete a file we no longer recognize.
+        var oldInfo = new FileInfo(oldPath);
+        var onDiskMatches =
+            priorMarker.OutputSize is not null
+            && priorMarker.OutputMtime is not null
+            && oldInfo.Exists
+            && oldInfo.Length == priorMarker.OutputSize.Value
+            && Math.Abs((new DateTimeOffset(oldInfo.LastWriteTimeUtc, TimeSpan.Zero) - priorMarker.OutputMtime.Value).TotalSeconds) <= 2;
+        if (!onDiskMatches)
+        {
+            _logger.Information(
+                "stale fallback {Old} not removed: on-disk file no longer matches recorded identity",
+                oldPath);
+            return;
+        }
+
+        // C5: never delete the file we just wrote (defensive — C2 already guards the
+        // name, but full-path equality protects against casing / path-shape quirks).
+        if (string.Equals(Path.GetFullPath(oldPath), Path.GetFullPath(newFinalPath), StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        // C6: the replacement must be confirmed on disk and non-empty before we
+        // remove the old one.
+        var newInfo = new FileInfo(newFinalPath);
+        if (!newInfo.Exists || newInfo.Length <= 0)
+        {
+            return;
+        }
+
+        // C7: best-effort delete. Never throw, never lose audio.
+        try
+        {
+            deleteFile(oldPath);
+            _logger.Information("cleaned stale fallback {Old} superseded by {New}", oldPath, newFinalPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.Warning(ex, "could not delete stale fallback {Old} (in use?)", oldPath);
+        }
     }
 }

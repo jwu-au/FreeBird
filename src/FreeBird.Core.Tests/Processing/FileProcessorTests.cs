@@ -1752,4 +1752,333 @@ public class FileProcessorTests : IDisposable
         var actualDelay = (marker.RetryAfter!.Value - marker.ResolvedAt).TotalSeconds;
         actualDelay.Should().BeApproximately(TimeSpan.FromMinutes(5).TotalSeconds, 2.0);
     }
+
+    // --- T6: stale-fallback cleanup on successful re-resolution (C1-C7) ---
+
+    // Captures every Serilog LogEvent so cleanup tests can assert that the
+    // expected INFO (kept-on-mismatch / cleaned) or WARN (delete-failed) line
+    // was emitted. The cleanup paths log via the real Serilog extension methods
+    // (Information/Warning), which a Moq<ILogger> cannot observe — those are
+    // static extensions over ILogger.Write, so we use a real logger + sink.
+    private sealed class CapturingSink : Serilog.Core.ILogEventSink
+    {
+        public List<Serilog.Events.LogEvent> Events { get; } = new();
+        public void Emit(Serilog.Events.LogEvent logEvent) => Events.Add(logEvent);
+    }
+
+    // Builds a SUT pinned to a FakeTimeProvider AND a real capturing Serilog
+    // logger so cleanup-path log lines are observable. Mirrors MakeFakeTimeSut
+    // defaults otherwise. Returns the FileProcessor, the mocks tests override,
+    // and the captured-events list.
+    private (FileProcessor sut,
+             Mock<IFormatSniffer> sniffer,
+             Mock<IFileNamer> naming,
+             Mock<ICompositeIntegrityChecker> integrity,
+             Mock<IMetadataResolver> metadata,
+             CapturingSink sink) MakeCapturingSut(FakeTimeProvider fakeTime)
+    {
+        var decoder = new Mock<IXorDecoder>();
+        var sniffer = new Mock<IFormatSniffer>();
+        var naming = new Mock<IFileNamer>();
+        var integrity = new Mock<ICompositeIntegrityChecker>();
+        var writer = new Mock<IAtomicFileWriter>();
+        var metadata = new Mock<IMetadataResolver>();
+        var tagWriter = new Mock<ITagWriter>();
+
+        tagWriter.Setup(t => t.WriteAsync(It.IsAny<string>(), It.IsAny<AudioFormat>(), It.IsAny<SongInfo>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(TagWriteResult.Success.Instance);
+        writer.Setup(w => w.WriteAsync(It.IsAny<string>(), It.IsAny<Func<Stream, CancellationToken, Task>>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+              .Returns<string, Func<Stream, CancellationToken, Task>, bool, CancellationToken>(async (path, callback, _, ct) =>
+              {
+                  Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                  await using var fs = File.Create(path);
+                  await callback(fs, ct);
+              });
+        decoder.Setup(d => d.DecodeAsync(It.IsAny<Stream>(), It.IsAny<Stream>(), It.IsAny<CancellationToken>()))
+               .Returns<Stream, Stream, CancellationToken>(async (_, output, ct) =>
+               {
+                   await output.WriteAsync(new byte[] { 1, 2, 3, 4 }, ct);
+               });
+
+        var sink = new CapturingSink();
+        var logger = new LoggerConfiguration()
+            .MinimumLevel.Verbose()
+            .WriteTo.Sink(sink)
+            .CreateLogger();
+        var markerSerializer = new ResolutionMarkerSerializer(logger);
+        var mutexPool = new OutputPathMutexPool();
+        var sut = new FileProcessor(
+            decoder.Object, sniffer.Object, naming.Object, integrity.Object,
+            writer.Object, metadata.Object, tagWriter.Object, markerSerializer,
+            mutexPool, logger, fakeTime);
+        return (sut, sniffer, naming, integrity, metadata, sink);
+    }
+
+    // Seeds a REAL on-disk fallback output file in _outputDir plus a prior
+    // (non-Resolved) marker whose OutputSize/OutputMtime match that file and
+    // whose SourceSize/SourceMtime match the given source. This sets up a
+    // genuine "old fallback should be superseded" scenario for cleanup tests.
+    private string SeedFallbackOutputAndMarker(
+        string stem,
+        string outputName,
+        long sourceSize,
+        DateTimeOffset sourceMtime,
+        MarkerStatus status = MarkerStatus.MetadataFetchFailed,
+        long? overrideOutputSize = null)
+    {
+        var oldPath = Path.Combine(_outputDir, outputName);
+        File.WriteAllBytes(oldPath, new byte[] { 9, 9, 9, 9, 9, 9 }); // 6 bytes
+        var oldInfo = new FileInfo(oldPath);
+
+        var marker = new ResolutionMarker
+        {
+            Schema = 2,
+            SourceStem = stem,
+            MusicId = stem,
+            SourcePath = Path.Combine(_inputDir, stem + ".uc"),
+            SourceSize = sourceSize,
+            SourceMtime = sourceMtime,
+            ResolvedAt = new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero),
+            Status = status,
+            OutputName = outputName,
+            Format = "Mp3",
+            Integrity = "L1",
+            NamingTemplate = "{artist} - {title}",
+            Reason = status == MarkerStatus.Resolved ? null : "seeded",
+            RetryAfter = null,
+            AttemptCount = status == MarkerStatus.Resolved ? null : 1,
+            OutputSize = overrideOutputSize ?? oldInfo.Length,
+            OutputMtime = new DateTimeOffset(oldInfo.LastWriteTimeUtc, TimeSpan.Zero),
+        };
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.WriteAtomic(_outputDir, marker);
+        return oldPath;
+    }
+
+    [Fact]
+    public async Task Cleanup_RemovesStaleFallback_OnSuccessfulReresolve()
+    {
+        var fixedInstant = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        var (sut, sniffer, naming, integrity, metadata, _) = MakeCapturingSut(new FakeTimeProvider(fixedInstant));
+        var ucPath = await MakeUcFileAsync("12345.uc");
+        var info = new FileInfo(ucPath);
+
+        // Prior run fell back to the bare musicId filename "12345.mp3".
+        var oldPath = SeedFallbackOutputAndMarker(
+            "12345", "12345.mp3",
+            sourceSize: info.Length,
+            sourceMtime: new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero));
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Success(new SongInfo(12345, "Title", new[] { "Artist" })));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
+              .Returns("Artist - Title.mp3");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions() with { WriteTags = false });
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        var newPath = Path.Combine(_outputDir, "Artist - Title.mp3");
+        File.Exists(newPath).Should().BeTrue();
+        File.Exists(oldPath).Should().BeFalse("the superseded fallback output must be cleaned up");
+
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "12345");
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.Status.Should().Be(MarkerStatus.Resolved);
+        marker.OutputName.Should().Be("Artist - Title.mp3");
+    }
+
+    [Fact]
+    public async Task Cleanup_KeepsFile_WhenOnDiskFileModified()
+    {
+        // C4: the recorded OutputSize no longer matches the on-disk file (the user
+        // edited/replaced it). The cleanup must KEEP the file and log INFO.
+        var fixedInstant = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        var (sut, sniffer, naming, integrity, metadata, sink) = MakeCapturingSut(new FakeTimeProvider(fixedInstant));
+        var ucPath = await MakeUcFileAsync("12345.uc");
+        var info = new FileInfo(ucPath);
+
+        // Marker records OutputSize=999 but the real file is 6 bytes -> mismatch.
+        var oldPath = SeedFallbackOutputAndMarker(
+            "12345", "12345.mp3",
+            sourceSize: info.Length,
+            sourceMtime: new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero),
+            overrideOutputSize: 999);
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Success(new SongInfo(12345, "Title", new[] { "Artist" })));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
+              .Returns("Artist - Title.mp3");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions() with { WriteTags = false });
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        File.Exists(oldPath).Should().BeTrue("on-disk file no longer matches recorded identity, so it must be kept");
+        sink.Events.Should().Contain(e =>
+            e.Level == Serilog.Events.LogEventLevel.Information
+            && e.MessageTemplate.Text.Contains("not removed"));
+    }
+
+    [Fact]
+    public async Task Cleanup_KeepsFile_WhenSourceChanged()
+    {
+        // C3: the prior fallback was recorded for a DIFFERENT source (size differs),
+        // so it is not an orphan of THIS source -> keep.
+        var fixedInstant = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        var (sut, sniffer, naming, integrity, metadata, _) = MakeCapturingSut(new FakeTimeProvider(fixedInstant));
+        var ucPath = await MakeUcFileAsync("12345.uc");
+        var info = new FileInfo(ucPath);
+
+        var oldPath = SeedFallbackOutputAndMarker(
+            "12345", "12345.mp3",
+            sourceSize: info.Length + 1000, // prior marker's source differs from current
+            sourceMtime: new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero));
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Success(new SongInfo(12345, "Title", new[] { "Artist" })));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
+              .Returns("Artist - Title.mp3");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions() with { WriteTags = false });
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        File.Exists(oldPath).Should().BeTrue("prior fallback was for a different source, so it must be kept");
+    }
+
+    [Fact]
+    public async Task Cleanup_NoOp_WhenPriorWasResolved()
+    {
+        // C1: the prior marker was already Resolved (not a fallback). There is
+        // nothing orphaned to clean up.
+        var fixedInstant = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        var (sut, sniffer, naming, integrity, metadata, _) = MakeCapturingSut(new FakeTimeProvider(fixedInstant));
+        var ucPath = await MakeUcFileAsync("12345.uc");
+        var info = new FileInfo(ucPath);
+
+        var oldPath = SeedFallbackOutputAndMarker(
+            "12345", "12345.mp3",
+            sourceSize: info.Length,
+            sourceMtime: new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero),
+            status: MarkerStatus.Resolved);
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Success(new SongInfo(12345, "Title", new[] { "Artist" })));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
+              .Returns("Artist - Title.mp3");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions() with { WriteTags = false });
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        File.Exists(oldPath).Should().BeTrue("prior marker was Resolved, not a fallback; nothing to clean");
+    }
+
+    [Fact]
+    public async Task Cleanup_NoOp_WhenOutputNameUnchanged()
+    {
+        // C2: the prior fallback OutputName equals the new final name. The new
+        // write overwrote it in place; there is no separate orphan to delete.
+        var fixedInstant = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        var (sut, sniffer, naming, integrity, metadata, _) = MakeCapturingSut(new FakeTimeProvider(fixedInstant));
+        var ucPath = await MakeUcFileAsync("12345.uc");
+        var info = new FileInfo(ucPath);
+
+        // Prior fallback used the SAME name the new resolution will produce.
+        var oldPath = SeedFallbackOutputAndMarker(
+            "12345", "Artist - Title.mp3",
+            sourceSize: info.Length,
+            sourceMtime: new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero));
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Success(new SongInfo(12345, "Title", new[] { "Artist" })));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
+              .Returns("Artist - Title.mp3");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions() with { OnCollision = CollisionPolicy.Overwrite, WriteTags = false });
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        // The same-named final file must still exist (it was overwritten, not deleted).
+        File.Exists(oldPath).Should().BeTrue("the file we just (re)wrote must never be deleted");
+    }
+
+    [Fact]
+    public void Cleanup_KeepsFile_WhenDeleteThrows()
+    {
+        // C7: all of C1-C6 pass on a REAL temp filesystem, but the final delete
+        // throws (file locked / in use). The cleanup must swallow it, keep both
+        // files, and log a WARN — never propagate, never lose audio. We exercise
+        // the internal seam directly with an injected throwing deleter.
+        var fixedInstant = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        var (sut, _, _, _, _, sink) = MakeCapturingSut(new FakeTimeProvider(fixedInstant));
+
+        // Arrange a genuine supersede scenario on disk: old fallback + new final.
+        long sourceSize = 4;
+        var sourceMtime = new DateTimeOffset(2024, 5, 1, 0, 0, 0, TimeSpan.Zero);
+        var oldPath = SeedFallbackOutputAndMarker(
+            "12345", "12345.mp3",
+            sourceSize: sourceSize,
+            sourceMtime: sourceMtime);
+        var newPath = Path.Combine(_outputDir, "Artist - Title.mp3");
+        File.WriteAllBytes(newPath, new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 }); // non-empty (C6)
+
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "12345");
+        ser.TryRead(markerPath, out var priorMarker).Should().BeTrue();
+
+        Action act = () => sut.TryCleanupStaleFallback(
+            _outputDir, newPath, sourceSize, sourceMtime, priorMarker!,
+            _ => throw new IOException("locked"));
+
+        act.Should().NotThrow();
+        File.Exists(oldPath).Should().BeTrue("a failed delete must leave the old file intact");
+        File.Exists(newPath).Should().BeTrue("the new file must never be touched by cleanup");
+        sink.Events.Should().Contain(e =>
+            e.Level == Serilog.Events.LogEventLevel.Warning
+            && e.MessageTemplate.Text.Contains("could not delete stale fallback"));
+    }
+
+    [Fact]
+    public async Task Cleanup_PopulatesOutputSizeMtime_OnMarker()
+    {
+        // Part A: a successful process must stat the just-written output and record
+        // OutputSize (exact) + OutputMtime (±2s) on the marker.
+        var fixedInstant = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        var (sut, sniffer, naming, integrity, metadata, _) = MakeCapturingSut(new FakeTimeProvider(fixedInstant));
+        var ucPath = await MakeUcFileAsync("12345.uc");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Success(new SongInfo(12345, "Title", new[] { "Artist" })));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
+              .Returns("Artist - Title.mp3");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions() with { WriteTags = false });
+
+        result.Outcome.Should().Be(ScanOutcome.Ok);
+        var newPath = Path.Combine(_outputDir, "Artist - Title.mp3");
+        var outInfo = new FileInfo(newPath);
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "12345");
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.OutputSize.Should().Be(outInfo.Length);
+        marker.OutputMtime.Should().NotBeNull();
+        Math.Abs((marker.OutputMtime!.Value - new DateTimeOffset(outInfo.LastWriteTimeUtc, TimeSpan.Zero)).TotalSeconds)
+            .Should().BeLessThanOrEqualTo(2.0);
+    }
 }
