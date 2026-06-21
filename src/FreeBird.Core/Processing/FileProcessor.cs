@@ -200,15 +200,40 @@ public sealed class FileProcessor : IFileProcessor
                 // colliding file's basename (which is identical to finalPath here).
                 if (!options.Offline)
                 {
+                    var newStatus = MapToMarkerStatus(resolution);
+
+                    // T6 (Part B), Step 8 mirror: when THIS run resolved, the colliding
+                    // file on disk IS the resolved-named output and a differently-named
+                    // prior fallback may now be an orphan. Capture the PRIOR marker BEFORE
+                    // overwriting it so the cleanup below can identify that orphan — same
+                    // as the Step 9.6 main path.
+                    ResolutionMarker? priorMarker = null;
+                    if (newStatus == MarkerStatus.Resolved)
+                    {
+                        var priorPath = ResolutionMarkerSerializer.MarkerPath(options.OutputDirectory, sourceStem);
+                        _markerSerializer.TryRead(priorPath, out priorMarker);
+                    }
+
                     var skipMarker = BuildMarker(
                         sourcePath, sourceStem, finalPath, format,
                         integrity.LevelApplied,
-                        MapToMarkerStatus(resolution),
+                        newStatus,
                         options.NamingTemplate,
                         tagWriteStatus: null,
                         tagWriteReason: null,
                         serverRetryAfter: (resolution as MetadataResolution.Fallback)?.ServerRetryAfter);
                     _markerSerializer.WriteAtomic(options.OutputDirectory, skipMarker);
+
+                    // T6 (Part B), Step 8 mirror of Step 9.6's Mi3=Z best-effort cleanup:
+                    // delete the superseded fallback orphan AFTER the marker commit. The
+                    // finalPath mutex is already held in this branch (no extra lock). The
+                    // unchanged C1-C7 matrix re-verifies safety; gated on Resolved only.
+                    if (newStatus == MarkerStatus.Resolved && priorMarker is not null)
+                    {
+                        TryCleanupStaleFallback(
+                            options.OutputDirectory, finalPath, skipMarker.SourceSize, skipMarker.SourceMtime,
+                            priorMarker, File.Delete);
+                    }
                 }
 
                 return new ScanResult(

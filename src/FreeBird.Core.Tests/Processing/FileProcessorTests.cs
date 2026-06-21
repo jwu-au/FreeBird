@@ -2081,4 +2081,202 @@ public class FileProcessorTests : IDisposable
         Math.Abs((marker.OutputMtime!.Value - new DateTimeOffset(outInfo.LastWriteTimeUtc, TimeSpan.Zero)).TotalSeconds)
             .Should().BeLessThanOrEqualTo(2.0);
     }
+
+    // ---- Step 8 collision-skip stale-fallback cleanup (Option X) ----
+    // These exercise the case where the resolved-named output is ALREADY on disk,
+    // so ProcessAsync takes the Step 8 collision-skip branch and returns early —
+    // BEFORE the Step 9.6 main-path cleanup. The fix mirrors the Step 9.6 cleanup
+    // inside the skip branch so a superseded <musicId> fallback orphan is removed.
+
+    [Fact]
+    public async Task CollisionSkip_PriorFallback_ResolvedNow_DeletesOrphan()
+    {
+        // Case A: prior marker is a FALLBACK (<musicId>.mp3 orphan on disk), THIS run
+        // RESOLVES, and the resolved-named file already exists -> Step 8 skip branch.
+        // The stale fallback orphan must be cleaned up even though we skip the write.
+        var fixedInstant = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        var (sut, sniffer, naming, integrity, metadata, _) = MakeCapturingSut(new FakeTimeProvider(fixedInstant));
+        var ucPath = await MakeUcFileAsync("12345.uc");
+        var info = new FileInfo(ucPath);
+
+        // Prior run fell back to the bare musicId filename "12345.mp3" (the orphan).
+        var oldPath = SeedFallbackOutputAndMarker(
+            "12345", "12345.mp3",
+            sourceSize: info.Length,
+            sourceMtime: new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero));
+
+        // The resolved-named output ALREADY EXISTS on disk -> forces the Step 8 skip.
+        var existing = Path.Combine(_outputDir, "Artist - Title.mp3");
+        var preSeedBytes = new byte[] { 0xAB, 0xCD, 0xEF };
+        await File.WriteAllBytesAsync(existing, preSeedBytes);
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Success(new SongInfo(12345, "Title", new[] { "Artist" })));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
+              .Returns("Artist - Title.mp3");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions(collision: CollisionPolicy.Skip) with { WriteTags = false });
+
+        result.Outcome.Should().Be(ScanOutcome.Skipped);
+        var afterBytes = await File.ReadAllBytesAsync(existing);
+        afterBytes.Should().Equal(preSeedBytes, "collision-skip must not overwrite the existing resolved file");
+        File.Exists(oldPath).Should().BeFalse("the superseded fallback orphan must be cleaned up on the skip path too");
+
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "12345");
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.Status.Should().Be(MarkerStatus.Resolved);
+        marker.OutputName.Should().Be("Artist - Title.mp3");
+    }
+
+    [Fact]
+    public async Task CollisionSkip_PriorAlreadyResolved_NoDelete()
+    {
+        // Case B boundary guard (out of scope): prior marker is ALREADY Resolved, so
+        // C1 blocks. A bare <musicId>.mp3 sibling lingers and must NOT be deleted.
+        var fixedInstant = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        var (sut, sniffer, naming, integrity, metadata, _) = MakeCapturingSut(new FakeTimeProvider(fixedInstant));
+        var ucPath = await MakeUcFileAsync("12345.uc");
+        var info = new FileInfo(ucPath);
+
+        // Prior marker already Resolved; OutputName matches the resolved file.
+        SeedFallbackOutputAndMarker(
+            "12345", "Artist - Title.mp3",
+            sourceSize: info.Length,
+            sourceMtime: new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero),
+            status: MarkerStatus.Resolved);
+
+        // A bare <musicId>.mp3 sibling that no marker points at — must survive.
+        var sibling = Path.Combine(_outputDir, "12345.mp3");
+        await File.WriteAllBytesAsync(sibling, new byte[] { 7, 7, 7 });
+
+        var existing = Path.Combine(_outputDir, "Artist - Title.mp3");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Success(new SongInfo(12345, "Title", new[] { "Artist" })));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
+              .Returns("Artist - Title.mp3");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions(collision: CollisionPolicy.Skip) with { WriteTags = false });
+
+        result.Outcome.Should().Be(ScanOutcome.Skipped);
+        File.Exists(sibling).Should().BeTrue("C1 blocks: an already-Resolved prior marker is out of scope for cleanup");
+        File.Exists(existing).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CollisionSkip_ThisRunNotResolved_NoDelete()
+    {
+        // THIS run does NOT resolve (fallback again). Cleanup is gated on Resolved
+        // only, so the prior fallback orphan must be KEPT and the prior marker is
+        // never even read for cleanup purposes.
+        var fixedInstant = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        var (sut, sniffer, naming, integrity, metadata, _) = MakeCapturingSut(new FakeTimeProvider(fixedInstant));
+        var ucPath = await MakeUcFileAsync("12345.uc");
+        var info = new FileInfo(ucPath);
+
+        var oldPath = SeedFallbackOutputAndMarker(
+            "12345", "12345.mp3",
+            sourceSize: info.Length,
+            sourceMtime: new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero));
+
+        // The fallback-named output already exists -> Step 8 skip on the bare id name.
+        var existing = Path.Combine(_outputDir, "12345.mp3");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Fallback("metadata-fetch-failed"));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
+              .Returns("12345.mp3");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions(collision: CollisionPolicy.Skip) with { WriteTags = false });
+
+        result.Outcome.Should().Be(ScanOutcome.Skipped);
+        File.Exists(oldPath).Should().BeTrue("cleanup is gated on Resolved only; a fallback re-run must not delete anything");
+
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "12345");
+        var ser = new ResolutionMarkerSerializer(new Mock<ILogger>().Object);
+        ser.TryRead(markerPath, out var marker).Should().BeTrue();
+        marker!.Status.Should().Be(MarkerStatus.MetadataFetchFailed);
+    }
+
+    [Fact]
+    public async Task CollisionSkip_C4Mismatch_KeepsOrphan_LogsInfo()
+    {
+        // C4: on the skip path too, if the on-disk orphan no longer matches the
+        // recorded OutputSize/OutputMtime, KEEP it and log INFO "not removed".
+        var fixedInstant = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        var (sut, sniffer, naming, integrity, metadata, sink) = MakeCapturingSut(new FakeTimeProvider(fixedInstant));
+        var ucPath = await MakeUcFileAsync("12345.uc");
+        var info = new FileInfo(ucPath);
+
+        // Marker records OutputSize=999 but the real orphan is 6 bytes -> mismatch.
+        var oldPath = SeedFallbackOutputAndMarker(
+            "12345", "12345.mp3",
+            sourceSize: info.Length,
+            sourceMtime: new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero),
+            overrideOutputSize: 999);
+
+        var existing = Path.Combine(_outputDir, "Artist - Title.mp3");
+        await File.WriteAllBytesAsync(existing, new byte[] { 0xAB, 0xCD, 0xEF });
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Success(new SongInfo(12345, "Title", new[] { "Artist" })));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
+              .Returns("Artist - Title.mp3");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions(collision: CollisionPolicy.Skip) with { WriteTags = false });
+
+        result.Outcome.Should().Be(ScanOutcome.Skipped);
+        File.Exists(oldPath).Should().BeTrue("C4 mismatch: on-disk file no longer matches recorded identity, so keep it");
+        sink.Events.Should().Contain(e =>
+            e.Level == Serilog.Events.LogEventLevel.Information
+            && e.MessageTemplate.Text.Contains("not removed"));
+    }
+
+    [Fact]
+    public async Task CollisionSkip_Offline_NoMarkerNoCleanup()
+    {
+        // Offline: the whole skip-branch marker write + cleanup sits inside !Offline,
+        // so no marker is written and the orphan is untouched.
+        var fixedInstant = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        var (sut, sniffer, naming, integrity, metadata, _) = MakeCapturingSut(new FakeTimeProvider(fixedInstant));
+        var ucPath = await MakeUcFileAsync("12345.uc");
+        var info = new FileInfo(ucPath);
+
+        var oldPath = SeedFallbackOutputAndMarker(
+            "12345", "12345.mp3",
+            sourceSize: info.Length,
+            sourceMtime: new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero));
+        // Remove the seeded marker so we can assert no marker is (re)written offline.
+        var markerPath = ResolutionMarkerSerializer.MarkerPath(_outputDir, "12345");
+        File.Delete(markerPath);
+
+        var existing = Path.Combine(_outputDir, "12345.mp3");
+
+        sniffer.Setup(s => s.SniffAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(AudioFormat.Mp3);
+        integrity.Setup(i => i.CheckAsync(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<IntegrityLevel>(), It.IsAny<CancellationToken>()))
+                 .ReturnsAsync(IntegrityResult.Passed(IntegrityLevel.L1));
+        metadata.Setup(m => m.ResolveAsync(It.IsAny<string>(), It.IsAny<IMetadataOptions>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new MetadataResolution.Fallback("offline-mode"));
+        naming.Setup(n => n.GetTargetName(It.IsAny<string>(), AudioFormat.Mp3, It.IsAny<SongInfo?>(), It.IsAny<string?>()))
+              .Returns("12345.mp3");
+
+        var result = await sut.ProcessAsync(ucPath, DefaultOptions(collision: CollisionPolicy.Skip) with { WriteTags = false, Offline = true });
+
+        result.Outcome.Should().Be(ScanOutcome.Skipped);
+        File.Exists(oldPath).Should().BeTrue("offline: no cleanup runs");
+        File.Exists(markerPath).Should().BeFalse("offline: no marker is written");
+    }
 }
