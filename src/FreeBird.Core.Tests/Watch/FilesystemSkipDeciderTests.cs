@@ -70,11 +70,23 @@ public sealed class FilesystemSkipDeciderTests : IDisposable
     private static ResolutionMarkerSerializer NewMarkerSerializer()
         => new(NullLogger());
 
+    // Builds a decider wired to a REAL ResolvedMarkerGate (not a mock) so the
+    // marker short-circuit (Branch 3b) is exercised end-to-end through the gate —
+    // the bit-for-bit parity proof for T2. The gate uses the SAME serializer +
+    // logger + TimeProvider the test passes, so markers seeded by the test are
+    // read identically and the retry gate honors the same clock.
+    private static FilesystemSkipDecider NewDecider(
+        ISidecarReader sidecarReader,
+        ResolutionMarkerSerializer markerSerializer,
+        ILogger logger,
+        TimeProvider timeProvider)
+        => new(sidecarReader, logger, new ResolvedMarkerGate(markerSerializer, logger, timeProvider));
+
     private static FilesystemSkipDecider WithRealReader()
-        => new(new TextSidecarReader(), NewMarkerSerializer(), NullLogger(), TimeProvider.System);
+        => NewDecider(new TextSidecarReader(), NewMarkerSerializer(), NullLogger(), TimeProvider.System);
 
     private static FilesystemSkipDecider WithMockReader(Mock<ISidecarReader> mock)
-        => new(mock.Object, NewMarkerSerializer(), NullLogger(), TimeProvider.System);
+        => NewDecider(mock.Object, NewMarkerSerializer(), NullLogger(), TimeProvider.System);
 
     private static string WriteV2Sidecar(
         string failedDir,
@@ -374,31 +386,27 @@ public sealed class FilesystemSkipDeciderTests : IDisposable
             .Should().ThrowAsync<OperationCanceledException>();
     }
 
+    private static ResolvedMarkerGate NewGate()
+        => new(NewMarkerSerializer(), NullLogger(), TimeProvider.System);
+
     [Fact]
     public void Constructor_NullSidecarReader_Throws()
     {
-        ((Action)(() => _ = new FilesystemSkipDecider(null!, NewMarkerSerializer(), NullLogger(), TimeProvider.System)))
-            .Should().Throw<ArgumentNullException>();
-    }
-
-    [Fact]
-    public void Constructor_NullMarkerSerializer_Throws()
-    {
-        ((Action)(() => _ = new FilesystemSkipDecider(new TextSidecarReader(), null!, NullLogger(), TimeProvider.System)))
+        ((Action)(() => _ = new FilesystemSkipDecider(null!, NullLogger(), NewGate())))
             .Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
     public void Constructor_NullLogger_Throws()
     {
-        ((Action)(() => _ = new FilesystemSkipDecider(new TextSidecarReader(), NewMarkerSerializer(), null!, TimeProvider.System)))
+        ((Action)(() => _ = new FilesystemSkipDecider(new TextSidecarReader(), null!, NewGate())))
             .Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
-    public void Constructor_NullTimeProvider_Throws()
+    public void Constructor_NullResolvedMarkerGate_Throws()
     {
-        ((Action)(() => _ = new FilesystemSkipDecider(new TextSidecarReader(), NewMarkerSerializer(), NullLogger(), null!)))
+        ((Action)(() => _ = new FilesystemSkipDecider(new TextSidecarReader(), NullLogger(), null!)))
             .Should().Throw<ArgumentNullException>();
     }
 
@@ -445,7 +453,7 @@ public sealed class FilesystemSkipDeciderTests : IDisposable
         var loggerMock = new Mock<ILogger>();
         loggerMock.Setup(l => l.Information(It.IsAny<string>(), It.IsAny<object?[]>()))
                   .Callback<string, object?[]>((tpl, _) => logged.Add(tpl));
-        var sut = new FilesystemSkipDecider(new TextSidecarReader(), NewMarkerSerializer(), loggerMock.Object, TimeProvider.System);
+        var sut = NewDecider(new TextSidecarReader(), NewMarkerSerializer(), loggerMock.Object, TimeProvider.System);
 
         var decision = await sut.DecideAsync(src, opts);
 
@@ -554,7 +562,7 @@ public sealed class FilesystemSkipDeciderTests : IDisposable
             .WriteTo.Sink(sink)
             .CreateLogger();
         var readerSerializer = new ResolutionMarkerSerializer(deciderLogger);
-        var sut = new FilesystemSkipDecider(new TextSidecarReader(), readerSerializer, deciderLogger, TimeProvider.System);
+        var sut = NewDecider(new TextSidecarReader(), readerSerializer, deciderLogger, TimeProvider.System);
 
         var decision = await sut.DecideAsync(src, opts);
 
@@ -661,13 +669,13 @@ public sealed class FilesystemSkipDeciderTests : IDisposable
 
         // Before RetryAfter — gate must NOT fire → Skip.
         var clockBefore = new FakeTimeProvider(retryAfter - TimeSpan.FromSeconds(1));
-        var sutBefore = new FilesystemSkipDecider(new TextSidecarReader(), NewMarkerSerializer(), NullLogger(), clockBefore);
+        var sutBefore = NewDecider(new TextSidecarReader(), NewMarkerSerializer(), NullLogger(), clockBefore);
         var decisionBefore = await sutBefore.DecideAsync(src, opts, CancellationToken.None);
         decisionBefore.ShouldProcess.Should().BeFalse("retry window has not elapsed per the injected clock");
 
         // After RetryAfter — gate fires → re-process.
         var clockAfter = new FakeTimeProvider(retryAfter + TimeSpan.FromSeconds(1));
-        var sutAfter = new FilesystemSkipDecider(new TextSidecarReader(), NewMarkerSerializer(), NullLogger(), clockAfter);
+        var sutAfter = NewDecider(new TextSidecarReader(), NewMarkerSerializer(), NullLogger(), clockAfter);
         var decisionAfter = await sutAfter.DecideAsync(src, opts, CancellationToken.None);
         decisionAfter.ShouldProcess.Should().BeTrue("retry window has elapsed per the injected clock");
     }

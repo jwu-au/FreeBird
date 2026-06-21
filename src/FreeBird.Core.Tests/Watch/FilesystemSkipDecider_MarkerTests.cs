@@ -85,7 +85,8 @@ public sealed class FilesystemSkipDecider_MarkerTests : IDisposable
             .WriteTo.Sink(sink)
             .CreateLogger();
         var serializer = new ResolutionMarkerSerializer(logger);
-        var decider = new FilesystemSkipDecider(new TextSidecarReader(), serializer, logger, TimeProvider.System);
+        var gate = new ResolvedMarkerGate(serializer, logger, TimeProvider.System);
+        var decider = new FilesystemSkipDecider(new TextSidecarReader(), logger, gate);
         return (decider, sink, serializer);
     }
 

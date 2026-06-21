@@ -46,13 +46,27 @@ public class ScanOrchestratorTests : IDisposable
         return path;
     }
 
+    // Permissive gate: always returns null (fall-through => process), preserving
+    // pre-T3 ScanOrchestrator behavior for every existing test.
+    private static Mock<IResolvedMarkerGate> PassthroughGate()
+    {
+        var gate = new Mock<IResolvedMarkerGate>();
+        gate.Setup(g => g.TryShortCircuit(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns((SkipDecision?)null);
+        return gate;
+    }
+
+    private ScanOrchestrator NewSut(IFileProcessor processor, ILogger logger) =>
+        new(processor, logger, PassthroughGate().Object);
+
     // --- Discovery ---
 
     [Fact]
     public async Task RunAsync_NoFiles_ReturnsZeroSummary()
     {
         var proc = new Mock<IFileProcessor>(MockBehavior.Strict);
-        var sut = new ScanOrchestrator(proc.Object, _testLogger);
+        var sut = NewSut(proc.Object, _testLogger);
 
         var summary = await sut.RunAsync(DefaultOptions());
 
@@ -75,7 +89,7 @@ public class ScanOrchestratorTests : IDisposable
             .ReturnsAsync((string path, ScanOptions _, CancellationToken _) =>
                 new ScanResult(path, ScanOutcome.Ok, AudioFormat.Mp3));
 
-        var sut = new ScanOrchestrator(proc.Object, _testLogger);
+        var sut = NewSut(proc.Object, _testLogger);
         var summary = await sut.RunAsync(DefaultOptions(concurrency: 1));
 
         summary.Processed.Should().Be(2);
@@ -95,7 +109,7 @@ public class ScanOrchestratorTests : IDisposable
             .ReturnsAsync((string path, ScanOptions _, CancellationToken _) =>
                 new ScanResult(path, ScanOutcome.Ok));
 
-        var sut = new ScanOrchestrator(proc.Object, _testLogger);
+        var sut = NewSut(proc.Object, _testLogger);
         var summary = await sut.RunAsync(DefaultOptions());
 
         summary.Processed.Should().Be(1);
@@ -115,7 +129,7 @@ public class ScanOrchestratorTests : IDisposable
             .ReturnsAsync((string path, ScanOptions _, CancellationToken _) =>
                 new ScanResult(path, ScanOutcome.Ok));
 
-        var sut = new ScanOrchestrator(proc.Object, _testLogger);
+        var sut = NewSut(proc.Object, _testLogger);
         var summary = await sut.RunAsync(DefaultOptions());
 
         summary.Processed.Should().Be(1);
@@ -140,7 +154,7 @@ public class ScanOrchestratorTests : IDisposable
         proc.Setup(p => p.ProcessAsync(pIf, It.IsAny<ScanOptions>(), It.IsAny<CancellationToken>())).ReturnsAsync(new ScanResult(pIf, ScanOutcome.IntegrityFailed));
         proc.Setup(p => p.ProcessAsync(pEr, It.IsAny<ScanOptions>(), It.IsAny<CancellationToken>())).ReturnsAsync(new ScanResult(pEr, ScanOutcome.Error));
 
-        var sut = new ScanOrchestrator(proc.Object, _testLogger);
+        var sut = NewSut(proc.Object, _testLogger);
         var summary = await sut.RunAsync(DefaultOptions());
 
         summary.Processed.Should().Be(5);
@@ -163,7 +177,7 @@ public class ScanOrchestratorTests : IDisposable
         proc.Setup(p => p.ProcessAsync(It.IsAny<string>(), It.IsAny<ScanOptions>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("boom"));
 
-        var sut = new ScanOrchestrator(proc.Object, _testLogger);
+        var sut = NewSut(proc.Object, _testLogger);
         var summary = await sut.RunAsync(DefaultOptions());
 
         summary.Processed.Should().Be(2);
@@ -189,7 +203,7 @@ public class ScanOrchestratorTests : IDisposable
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
-        var sut = new ScanOrchestrator(proc.Object, _testLogger);
+        var sut = NewSut(proc.Object, _testLogger);
         Func<Task> act = () => sut.RunAsync(DefaultOptions(), cts.Token);
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
@@ -213,7 +227,7 @@ public class ScanOrchestratorTests : IDisposable
                 return new ScanResult(path, ScanOutcome.Ok);
             });
 
-        var sut = new ScanOrchestrator(proc.Object, _testLogger);
+        var sut = NewSut(proc.Object, _testLogger);
         await sut.RunAsync(DefaultOptions(concurrency: 3));
 
         maxInflight.Should().BeLessThanOrEqualTo(3);
@@ -225,7 +239,7 @@ public class ScanOrchestratorTests : IDisposable
     [Fact]
     public async Task RunAsync_NullOptions_Throws()
     {
-        var sut = new ScanOrchestrator(new Mock<IFileProcessor>().Object, _testLogger);
+        var sut = NewSut(new Mock<IFileProcessor>().Object, _testLogger);
         Func<Task> act = () => sut.RunAsync(null!);
         await act.Should().ThrowAsync<ArgumentNullException>();
     }
@@ -233,7 +247,7 @@ public class ScanOrchestratorTests : IDisposable
     [Fact]
     public async Task RunAsync_NonexistentInputDir_Throws()
     {
-        var sut = new ScanOrchestrator(new Mock<IFileProcessor>().Object, _testLogger);
+        var sut = NewSut(new Mock<IFileProcessor>().Object, _testLogger);
         var bad = new ScanOptions(new[] { "/nonexistent/dir/xyz" }, _outputDir, IntegrityLevel.Auto, 1, CollisionPolicy.Skip);
         Func<Task> act = () => sut.RunAsync(bad);
         await act.Should().ThrowAsync<DirectoryNotFoundException>();
@@ -242,14 +256,21 @@ public class ScanOrchestratorTests : IDisposable
     [Fact]
     public void Constructor_NullProcessor_Throws()
     {
-        Action act = () => _ = new ScanOrchestrator(null!, _testLogger);
+        Action act = () => _ = new ScanOrchestrator(null!, _testLogger, PassthroughGate().Object);
         act.Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
     public void Constructor_NullLogger_Throws()
     {
-        Action act = () => _ = new ScanOrchestrator(new Mock<IFileProcessor>().Object, null!);
+        Action act = () => _ = new ScanOrchestrator(new Mock<IFileProcessor>().Object, null!, PassthroughGate().Object);
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void Constructor_NullResolvedMarkerGate_Throws()
+    {
+        Action act = () => _ = new ScanOrchestrator(new Mock<IFileProcessor>().Object, _testLogger, null!);
         act.Should().Throw<ArgumentNullException>();
     }
 
@@ -275,7 +296,7 @@ public class ScanOrchestratorTests : IDisposable
                 new ScanResult(path, ScanOutcome.Ok, AudioFormat.Mp3));
 
         var opts = new ScanOptions(new[] { inputA, inputB }, _outputDir, IntegrityLevel.Auto, 1, CollisionPolicy.Skip);
-        var sut = new ScanOrchestrator(proc.Object, _testLogger);
+        var sut = NewSut(proc.Object, _testLogger);
         var summary = await sut.RunAsync(opts);
 
         summary.Processed.Should().Be(2);
@@ -297,7 +318,7 @@ public class ScanOrchestratorTests : IDisposable
             _outputDir,
             IntegrityLevel.Auto, 1, CollisionPolicy.Skip);
 
-        var sut = new ScanOrchestrator(proc.Object, _testLogger);
+        var sut = NewSut(proc.Object, _testLogger);
         Func<Task> act = () => sut.RunAsync(opts);
 
         await act.Should().ThrowAsync<DirectoryNotFoundException>()
@@ -312,7 +333,7 @@ public class ScanOrchestratorTests : IDisposable
         var proc = new Mock<IFileProcessor>(MockBehavior.Strict);
         var opts = new ScanOptions(Array.Empty<string>(), _outputDir, IntegrityLevel.Auto, 1, CollisionPolicy.Skip);
 
-        var sut = new ScanOrchestrator(proc.Object, _testLogger);
+        var sut = NewSut(proc.Object, _testLogger);
         var summary = await sut.RunAsync(opts);
 
         summary.Processed.Should().Be(0);
@@ -330,7 +351,7 @@ public class ScanOrchestratorTests : IDisposable
             _outputDir,
             IntegrityLevel.Auto, 1, CollisionPolicy.Skip);
 
-        var sut = new ScanOrchestrator(proc.Object, _testLogger);
+        var sut = NewSut(proc.Object, _testLogger);
         Func<Task> act = () => sut.RunAsync(opts);
 
         // Fail-fast on the first missing dir, not the last.
@@ -367,12 +388,68 @@ public class ScanOrchestratorTests : IDisposable
             .ReturnsAsync(new ScanResult(bEr, ScanOutcome.Error, AudioFormat.Mp3));
 
         var opts = new ScanOptions(new[] { inputA, inputB }, _outputDir, IntegrityLevel.Auto, 1, CollisionPolicy.Skip);
-        var sut = new ScanOrchestrator(proc.Object, _testLogger);
+        var sut = NewSut(proc.Object, _testLogger);
         var summary = await sut.RunAsync(opts);
 
         summary.Processed.Should().Be(4);
         summary.Ok.Should().Be(2);
         summary.Skipped.Should().Be(1);
         summary.Errors.Should().Be(1);
+    }
+
+    // --- T3: marker gate short-circuit (THE CORE FIX) ---
+
+    [Fact]
+    public async Task RunAsync_GateReturnsSkip_DoesNotCallProcessAsync()
+    {
+        // Regression: an already-resolved file must be skipped BEFORE any
+        // IFileProcessor.ProcessAsync call (which is where the NetEase metadata
+        // API would be hit). Gate returns a Skip => zero ProcessAsync calls.
+        var file = await TouchAsync("resolved.uc");
+
+        var gate = new Mock<IResolvedMarkerGate>();
+        gate.Setup(g => g.TryShortCircuit(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns(SkipDecision.Skip(SkipReason.AlreadyDecodedViaMarker, "marker"));
+
+        var proc = new Mock<IFileProcessor>(MockBehavior.Strict);
+
+        var sut = new ScanOrchestrator(proc.Object, _testLogger, gate.Object);
+        var summary = await sut.RunAsync(DefaultOptions(concurrency: 1));
+
+        proc.Verify(p => p.ProcessAsync(
+            It.IsAny<string>(), It.IsAny<ScanOptions>(), It.IsAny<CancellationToken>()), Times.Never);
+        summary.Processed.Should().Be(1);
+        summary.Skipped.Should().Be(1);
+        summary.Ok.Should().Be(0);
+        gate.Verify(g => g.TryShortCircuit(
+            file, _outputDir, It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunAsync_GateReturnsNull_CallsProcessAsyncOnce()
+    {
+        // Fall-through: gate returns null => the file is processed exactly as
+        // before T3 (Outcome flows into the summary).
+        var file = await TouchAsync("fresh.uc");
+
+        var gate = new Mock<IResolvedMarkerGate>();
+        gate.Setup(g => g.TryShortCircuit(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns((SkipDecision?)null);
+
+        var proc = new Mock<IFileProcessor>();
+        proc.Setup(p => p.ProcessAsync(It.IsAny<string>(), It.IsAny<ScanOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string path, ScanOptions _, CancellationToken _) =>
+                new ScanResult(path, ScanOutcome.Ok, AudioFormat.Mp3));
+
+        var sut = new ScanOrchestrator(proc.Object, _testLogger, gate.Object);
+        var summary = await sut.RunAsync(DefaultOptions(concurrency: 1));
+
+        proc.Verify(p => p.ProcessAsync(
+            file, It.IsAny<ScanOptions>(), It.IsAny<CancellationToken>()), Times.Once);
+        summary.Processed.Should().Be(1);
+        summary.Ok.Should().Be(1);
+        summary.Skipped.Should().Be(0);
     }
 }

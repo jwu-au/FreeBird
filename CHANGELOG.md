@@ -5,6 +5,11 @@ All notable changes to FreeBird are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.2] — 2026-06-21
+
+### Fixed
+- **`scan` and `watch` no longer re-request metadata for already-resolved files.** Previously every `fb scan` invocation — and every `fb watch`/service initial sweep (e.g. on reboot) — re-hit the NetEase API for *all* cache files, even ones already successfully decoded in a prior run (their `<artist> - <title>` output and resolution marker already on disk). With no network at boot this produced a burst of API failures, `MetadataFetchFailed` markers, fallback `<musicId>` skips, and ~1-minute-later retries; with network it meant N redundant API calls (rate-limit risk). Both paths now consult the resolution marker *before* any API call and skip already-resolved files immediately. Failed-status markers still honor their retry-after backoff (a file due for retry is still re-processed), and a changed source or naming template still re-processes. `scan` and `watch` now follow the exact same skip rule (a single shared `ResolvedMarkerGate`).
+
 ## [3.5.1] — 2026-06-19
 
 ### Fixed

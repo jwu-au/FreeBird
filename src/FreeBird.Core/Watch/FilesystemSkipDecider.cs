@@ -6,7 +6,6 @@ using FreeBird.Core.Abstractions;
 using FreeBird.Core.Decoding;
 using FreeBird.Core.Models;
 using FreeBird.Core.Naming;
-using FreeBird.Core.Processing;
 using Serilog;
 
 namespace FreeBird.Core.Watch;
@@ -27,23 +26,19 @@ public sealed class FilesystemSkipDecider : ISkipDecider
 {
     private static readonly string[] OutputExtensions = { ".mp3", ".flac", ".m4a" };
     private const string FailedDirName = ".freebird-failed";
-    private const int SupportedMarkerSchema = 2;
 
     private readonly ISidecarReader _sidecarReader;
-    private readonly ResolutionMarkerSerializer _markerSerializer;
     private readonly ILogger _logger;
-    private readonly TimeProvider _timeProvider;
+    private readonly IResolvedMarkerGate _resolvedMarkerGate;
 
     public FilesystemSkipDecider(
         ISidecarReader sidecarReader,
-        ResolutionMarkerSerializer markerSerializer,
         ILogger logger,
-        TimeProvider timeProvider)
+        IResolvedMarkerGate resolvedMarkerGate)
     {
         _sidecarReader = sidecarReader ?? throw new ArgumentNullException(nameof(sidecarReader));
-        _markerSerializer = markerSerializer ?? throw new ArgumentNullException(nameof(markerSerializer));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        _resolvedMarkerGate = resolvedMarkerGate ?? throw new ArgumentNullException(nameof(resolvedMarkerGate));
     }
 
     public async Task<SkipDecision> DecideAsync(
@@ -114,7 +109,8 @@ public sealed class FilesystemSkipDecider : ISkipDecider
         // marker simply falls through. The serializer's TryRead is lenient — it
         // returns false on missing/parse error and logs WRN on parse error itself,
         // so we never re-log here.
-        var markerDecision = TryShortCircuitOnMarker(sourcePath, stem, info, options);
+        var markerDecision = _resolvedMarkerGate.TryShortCircuit(
+            sourcePath, options.OutputDir, options.NamingTemplate, cancellationToken);
         if (markerDecision is not null)
         {
             return markerDecision;
@@ -216,93 +212,5 @@ public sealed class FilesystemSkipDecider : ISkipDecider
         // 5. Default: Process
         _logger.Debug("Skip decision: {Path} -> Process", sourcePath);
         return SkipDecision.Process();
-    }
-
-    /// <summary>
-    /// Branch 3b implementation (v3.0.1, T05). Returns a non-null <see cref="SkipDecision"/>
-    /// only when ALL marker checks pass; returns <c>null</c> to indicate the caller should
-    /// fall through to Branch 3c (musicId-only fallback) and the legacy sidecar check.
-    ///
-    /// Checks performed (in order, short-circuit on any failure):
-    ///   1. Marker file exists at &lt;outputDir&gt;/.freebird-resolved/&lt;stem&gt;.json
-    ///   2. Marker parses (lenient — TryRead logs WRN on parse failure itself)
-    ///   3. Marker schema is present and ≤ <see cref="SupportedMarkerSchema"/>
-    ///   4. Freshness: marker.SourceSize == current AND marker.SourceMtime == current
-    ///   5. Naming-template match (D3): marker.NamingTemplate == options.NamingTemplate
-    ///   6. Retry gate (D4): for non-Resolved status, marker.RetryAfter must NOT have elapsed
-    ///   7. Belt-and-suspenders: the referenced output file still exists
-    /// </summary>
-    private SkipDecision? TryShortCircuitOnMarker(
-        string sourcePath,
-        string stem,
-        FileInfo info,
-        WatchOptions options)
-    {
-        var markerPath = ResolutionMarkerSerializer.MarkerPath(options.OutputDir, stem);
-        if (!File.Exists(markerPath))
-        {
-            return null;
-        }
-
-        if (!_markerSerializer.TryRead(markerPath, out var marker) || marker is null)
-        {
-            // Serializer already logged WRN on parse failure; do NOT log a second WRN.
-            return null;
-        }
-
-        if (marker.Schema <= 0 || marker.Schema > SupportedMarkerSchema)
-        {
-            _logger.Warning(
-                "Marker at {MarkerPath} has unsupported schema {Schema}; ignoring",
-                markerPath, marker.Schema);
-            return null;
-        }
-
-        // Freshness — source size + mtime.
-        var currentMtime = new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero);
-        if (marker.SourceSize != info.Length || marker.SourceMtime != currentMtime)
-        {
-            _logger.Information(
-                "marker stale (source changed): re-processing {SourcePath}",
-                sourcePath);
-            return null;
-        }
-
-        // Template-change detection (D3).
-        if (!string.Equals(marker.NamingTemplate, options.NamingTemplate, StringComparison.Ordinal))
-        {
-            _logger.Information(
-                "marker stale (naming template changed from '{OldTemplate}' to '{NewTemplate}'): re-processing {SourcePath}",
-                marker.NamingTemplate, options.NamingTemplate, sourcePath);
-            return null;
-        }
-
-        // Retry gate (D4) — only applies to non-Resolved statuses with non-null RetryAfter.
-        if (marker.Status != MarkerStatus.Resolved
-            && marker.RetryAfter is not null
-            && _timeProvider.GetUtcNow() >= marker.RetryAfter.Value)
-        {
-            var elapsed = _timeProvider.GetUtcNow() - marker.RetryAfter.Value;
-            _logger.Information(
-                "marker retry-after elapsed ({Status}, retried after {Duration}): re-processing {SourcePath}",
-                marker.Status, elapsed, sourcePath);
-            return null;
-        }
-
-        // Belt-and-suspenders: confirm the output file still exists.
-        var outputPath = Path.Combine(options.OutputDir, marker.OutputName);
-        if (!File.Exists(outputPath))
-        {
-            _logger.Information(
-                "marker references missing output '{OutputName}': re-processing {SourcePath}",
-                marker.OutputName, sourcePath);
-            return null;
-        }
-
-        // All checks passed — short-circuit.
-        _logger.Debug(
-            "marker hit: {SourcePath} ({Status}, output={OutputName})",
-            sourcePath, marker.Status, marker.OutputName);
-        return SkipDecision.Skip(SkipReason.AlreadyDecodedViaMarker, markerPath);
     }
 }

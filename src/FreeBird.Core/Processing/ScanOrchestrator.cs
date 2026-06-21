@@ -19,11 +19,13 @@ public sealed class ScanOrchestrator : IScanOrchestrator
 {
     private readonly IFileProcessor _processor;
     private readonly ILogger _logger;
+    private readonly IResolvedMarkerGate _resolvedMarkerGate;
 
-    public ScanOrchestrator(IFileProcessor processor, ILogger logger)
+    public ScanOrchestrator(IFileProcessor processor, ILogger logger, IResolvedMarkerGate resolvedMarkerGate)
     {
         _processor = processor ?? throw new ArgumentNullException(nameof(processor));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _resolvedMarkerGate = resolvedMarkerGate ?? throw new ArgumentNullException(nameof(resolvedMarkerGate));
     }
 
     public async Task<ScanSummary> RunAsync(ScanOptions options, CancellationToken cancellationToken = default)
@@ -64,6 +66,19 @@ public sealed class ScanOrchestrator : IScanOrchestrator
         {
             try
             {
+                // T3: consult the shared marker gate BEFORE dispatching to the
+                // processor. An already-resolved file (valid+fresh marker, output
+                // present, retry-backoff not due) is skipped here so its metadata
+                // is never re-requested from NetEase. This also fixes the watch
+                // initial sweep transitively (it flows through ScanOrchestrator).
+                var gateDecision = _resolvedMarkerGate.TryShortCircuit(file, options.OutputDirectory, options.NamingTemplate, ct);
+                if (gateDecision is not null)
+                {
+                    Interlocked.Increment(ref skipped);
+                    _logger.Information("SKIP {Source} (already resolved; marker hit)", file);
+                    return; // no ProcessAsync => no metadata API call
+                }
+
                 var result = await _processor.ProcessAsync(file, options, ct).ConfigureAwait(false);
                 LogResult(result);
                 IncrementCounter(result.Outcome,

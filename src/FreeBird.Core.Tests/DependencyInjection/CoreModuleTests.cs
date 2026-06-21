@@ -37,6 +37,7 @@ public class CoreModuleTests
     [InlineData(typeof(ICompositeIntegrityChecker))]
     [InlineData(typeof(IFileProcessor))]
     [InlineData(typeof(IScanOrchestrator))]
+    [InlineData(typeof(IResolvedMarkerGate))]
     [InlineData(typeof(INamingTemplateRenderer))]
     [InlineData(typeof(INetEaseApiClient))]
     [InlineData(typeof(IMetadataResolver))]
