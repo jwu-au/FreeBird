@@ -36,9 +36,9 @@ public sealed class StemBasedFileNamer : IFileNamer
     }
 
     /// <summary>
-    /// Extract the stem (filename without .uc / .uc! suffix and without directory) from a source path.
+    /// Extract the stem (filename without .uc / .uc! / .ncm suffix and without directory) from a source path.
     /// Public so other components (e.g. FileProcessor quarantine, FilesystemSkipDecider) can use the same logic.
-    /// For inputs without a .uc/.uc! suffix, the filename is returned unchanged (preserving any other extension).
+    /// For inputs without a recognised suffix, the filename is returned unchanged (preserving any other extension).
     /// </summary>
     public static string GetStem(string sourcePath)
     {
@@ -48,9 +48,10 @@ public sealed class StemBasedFileNamer : IFileNamer
         var slashIdx = sourcePath.LastIndexOfAny(new[] { '/', '\\' });
         var filename = slashIdx >= 0 ? sourcePath[(slashIdx + 1)..] : sourcePath;
 
-        // Strip .uc! (4 chars) first, then .uc (3 chars), both case-insensitive.
-        // Non-uc filenames are returned as-is (preserving any other extension), so
-        // GetTargetName(nothing.txt, mp3, null) still produces "nothing.txt.mp3".
+        // Strip .uc! (4 chars) first, then .uc (3 chars), then .ncm (4 chars), all
+        // case-insensitive. Order is irrelevant because the suffixes are distinct.
+        // Non-suffixed filenames are returned as-is (preserving any other extension),
+        // so GetTargetName(nothing.txt, mp3, null) still produces "nothing.txt.mp3".
         if (filename.EndsWith(".uc!", StringComparison.OrdinalIgnoreCase))
         {
             return filename[..^4];
@@ -58,6 +59,12 @@ public sealed class StemBasedFileNamer : IFileNamer
         if (filename.EndsWith(".uc", StringComparison.OrdinalIgnoreCase))
         {
             return filename[..^3];
+        }
+        // Task 15: .ncm is the encrypted NetEase container handled by NcmFileProcessor.
+        // Stripping it here keeps marker/quarantine stems clean (song, not song.ncm).
+        if (filename.EndsWith(".ncm", StringComparison.OrdinalIgnoreCase))
+        {
+            return filename[..^4];
         }
         return filename;
     }

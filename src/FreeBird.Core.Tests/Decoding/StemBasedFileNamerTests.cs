@@ -17,6 +17,9 @@ public class StemBasedFileNamerTests
     [InlineData("song.uc", AudioFormat.M4a, "song.m4a")]
     [InlineData("weird.name.uc", AudioFormat.Mp3, "weird.name.mp3")]
     [InlineData("weird.name.uc!", AudioFormat.Flac, "weird.name.flac")]
+    // Task 15: .ncm source -> clean target, no double extension (song.ncm + flac => song.flac).
+    [InlineData("song.ncm", AudioFormat.Flac, "song.flac")]
+    [InlineData("song.NCM", AudioFormat.Flac, "song.flac")]
     public void GetTargetName_StripsUcSuffix_AppendsFormatExt(string input, AudioFormat fmt, string expected)
     {
         _sut.GetTargetName(input, fmt, null).Should().Be(expected);
@@ -61,6 +64,12 @@ public class StemBasedFileNamerTests
     [InlineData("foo", "foo")]
     [InlineData("weird.name.uc!", "weird.name")]
     [InlineData("nothing.txt", "nothing.txt")]
+    // Task 15: .ncm suffix is now also stripped (case-insensitive), so NcmFileProcessor
+    // marker/quarantine stems are clean ("song", not "song.ncm").
+    [InlineData("song.ncm", "song")]
+    [InlineData("a/b/song.ncm", "song")]
+    [InlineData("Song.NCM", "Song")]
+    [InlineData("weird.name.ncm", "weird.name")]
     public void GetStem_StripsUcSuffixAndDirectory(string input, string expected)
     {
         StemBasedFileNamer.GetStem(input).Should().Be(expected);

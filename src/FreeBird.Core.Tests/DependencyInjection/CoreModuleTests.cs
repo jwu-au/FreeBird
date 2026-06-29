@@ -271,6 +271,57 @@ public class CoreModuleTests
         container.Resolve<IM4aTagWriter>().GetType().Should().Be(typeof(M4aTagWriter));
     }
 
+    // ------------------------------------------------------------------
+    // Task 17 — .ncm decode feature DI wiring
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void IFileProcessor_StillResolvesAs_FileProcessor()
+    {
+        using var container = BuildContainer();
+        container.Resolve<IFileProcessor>().GetType().Should().Be(typeof(FreeBird.Core.Processing.FileProcessor));
+    }
+
+    [Fact]
+    public void IFileProcessorRouter_Resolves_AsFileProcessorRouter()
+    {
+        using var container = BuildContainer();
+        container.Resolve<IFileProcessorRouter>().GetType()
+            .Should().Be(typeof(FreeBird.Core.Processing.FileProcessorRouter));
+    }
+
+    [Fact]
+    public void FileProcessorRouter_Select_RoutesByExtension()
+    {
+        using var container = BuildContainer();
+        var router = container.Resolve<IFileProcessorRouter>();
+        router.Select("x.ncm").GetType().Should().Be(typeof(FreeBird.Core.Processing.NcmFileProcessor));
+        router.Select("x.uc").GetType().Should().Be(typeof(FreeBird.Core.Processing.FileProcessor));
+        router.Select("x.uc!").GetType().Should().Be(typeof(FreeBird.Core.Processing.FileProcessor));
+    }
+
+    [Fact]
+    public void BothProcessors_ResolveAsSelf()
+    {
+        using var container = BuildContainer();
+        container.Resolve<FreeBird.Core.Processing.FileProcessor>().Should().NotBeNull();
+        container.Resolve<FreeBird.Core.Processing.NcmFileProcessor>().Should().NotBeNull();
+    }
+
+    [Fact]
+    public void ICoverWriter_ResolvesAs_CompositeCoverWriter()
+    {
+        using var container = BuildContainer();
+        container.Resolve<ICoverWriter>().GetType().Should().Be(typeof(CompositeCoverWriter));
+    }
+
+    [Fact]
+    public void INcmDecoder_Resolves()
+    {
+        using var container = BuildContainer();
+        container.Resolve<INcmDecoder>().Should().NotBeNull();
+    }
+
     [Fact]
     public void ResolutionMarkerSerializer_Resolves_AsSingleInstance()
     {

@@ -28,7 +28,7 @@ public sealed class WatchOrchestrator : IWatchOrchestrator
     private readonly IScanOrchestrator _scanOrchestrator;
     private readonly ICompletionDetector _completionDetector;
     private readonly ISkipDecider _skipDecider;
-    private readonly IFileProcessor _fileProcessor;
+    private readonly IFileProcessorRouter _router;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger _logger;
 
@@ -39,14 +39,14 @@ public sealed class WatchOrchestrator : IWatchOrchestrator
         IScanOrchestrator scanOrchestrator,
         ICompletionDetector completionDetector,
         ISkipDecider skipDecider,
-        IFileProcessor fileProcessor,
+        IFileProcessorRouter router,
         TimeProvider timeProvider,
         ILogger logger)
     {
         _scanOrchestrator = scanOrchestrator ?? throw new ArgumentNullException(nameof(scanOrchestrator));
         _completionDetector = completionDetector ?? throw new ArgumentNullException(nameof(completionDetector));
         _skipDecider = skipDecider ?? throw new ArgumentNullException(nameof(skipDecider));
-        _fileProcessor = fileProcessor ?? throw new ArgumentNullException(nameof(fileProcessor));
+        _router = router ?? throw new ArgumentNullException(nameof(router));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -283,7 +283,7 @@ public sealed class WatchOrchestrator : IWatchOrchestrator
             {
                 try
                 {
-                    var result = await _fileProcessor.ProcessAsync(path, scanOptions, ct).ConfigureAwait(false);
+                    var result = await _router.Select(path).ProcessAsync(path, scanOptions, ct).ConfigureAwait(false);
                     LogResult(result);
                     switch (result.Outcome)
                     {
@@ -369,6 +369,12 @@ public sealed class WatchOrchestrator : IWatchOrchestrator
             if (!IsHidden(path)) { yield return path; }
         }
         foreach (var path in Directory.EnumerateFiles(inputDir, "*.uc!", SearchOption.TopDirectoryOnly))
+        {
+            if (!IsHidden(path)) { yield return path; }
+        }
+        // Task 15: .ncm is the encrypted NetEase container; the router dispatches these
+        // to NcmFileProcessor while .uc/.uc! continue to the default FileProcessor.
+        foreach (var path in Directory.EnumerateFiles(inputDir, "*.ncm", SearchOption.TopDirectoryOnly))
         {
             if (!IsHidden(path)) { yield return path; }
         }

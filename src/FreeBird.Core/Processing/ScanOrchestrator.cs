@@ -12,18 +12,19 @@ using Serilog;
 namespace FreeBird.Core.Processing;
 
 /// <summary>
-/// Top-level scan driver: enumerates .uc/.uc! files in a directory, dispatches them through
-/// IFileProcessor with Parallel.ForEachAsync, aggregates results into a ScanSummary.
+/// Top-level scan driver: enumerates .uc/.uc!/.ncm files in a directory, dispatches each
+/// through the <see cref="IFileProcessorRouter"/>-selected processor with
+/// Parallel.ForEachAsync, aggregates results into a ScanSummary.
 /// </summary>
 public sealed class ScanOrchestrator : IScanOrchestrator
 {
-    private readonly IFileProcessor _processor;
+    private readonly IFileProcessorRouter _router;
     private readonly ILogger _logger;
     private readonly IResolvedMarkerGate _resolvedMarkerGate;
 
-    public ScanOrchestrator(IFileProcessor processor, ILogger logger, IResolvedMarkerGate resolvedMarkerGate)
+    public ScanOrchestrator(IFileProcessorRouter router, ILogger logger, IResolvedMarkerGate resolvedMarkerGate)
     {
-        _processor = processor ?? throw new ArgumentNullException(nameof(processor));
+        _router = router ?? throw new ArgumentNullException(nameof(router));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _resolvedMarkerGate = resolvedMarkerGate ?? throw new ArgumentNullException(nameof(resolvedMarkerGate));
     }
@@ -79,7 +80,7 @@ public sealed class ScanOrchestrator : IScanOrchestrator
                     return; // no ProcessAsync => no metadata API call
                 }
 
-                var result = await _processor.ProcessAsync(file, options, ct).ConfigureAwait(false);
+                var result = await _router.Select(file).ProcessAsync(file, options, ct).ConfigureAwait(false);
                 LogResult(result);
                 IncrementCounter(result.Outcome,
                     ref ok, ref skipped, ref unknown, ref integrityFailed, ref errors);
@@ -114,12 +115,18 @@ public sealed class ScanOrchestrator : IScanOrchestrator
 
     private static System.Collections.Generic.IEnumerable<string> EnumerateSources(string inputDir)
     {
-        // Non-recursive (TopDirectoryOnly). Match both .uc and .uc!
+        // Non-recursive (TopDirectoryOnly). Match .uc, .uc! and .ncm.
         foreach (var path in Directory.EnumerateFiles(inputDir, "*.uc", SearchOption.TopDirectoryOnly))
         {
             if (!IsHidden(path)) { yield return path; }
         }
         foreach (var path in Directory.EnumerateFiles(inputDir, "*.uc!", SearchOption.TopDirectoryOnly))
+        {
+            if (!IsHidden(path)) { yield return path; }
+        }
+        // Task 15: .ncm is the encrypted NetEase container; the router dispatches these
+        // to NcmFileProcessor while .uc/.uc! continue to the default FileProcessor.
+        foreach (var path in Directory.EnumerateFiles(inputDir, "*.ncm", SearchOption.TopDirectoryOnly))
         {
             if (!IsHidden(path)) { yield return path; }
         }

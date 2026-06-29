@@ -73,10 +73,20 @@ public class CycleLockE2ETests : IDisposable
 
         // 3) Install slow processor. 8 seconds is enough for ~7 polling ticks at 1s
         //    interval to occur while the cycle lock is held.
+        //
+        //    The orchestrators no longer inject IFileProcessor directly — they ask an
+        //    IFileProcessorRouter per file. So overriding As<IFileProcessor> alone would
+        //    be ignored (the router resolves the concrete FileProcessor AsSelf). We
+        //    therefore override the router too, pointing every Select() at the slow
+        //    processor so the dispatched work actually sleeps and holds the cycle lock.
+        var slow = new SlowFileProcessor { Delay = TimeSpan.FromSeconds(8) };
         WatchRunner.AdditionalContainerSetup = builder =>
         {
-            builder.RegisterInstance(new SlowFileProcessor { Delay = TimeSpan.FromSeconds(8) })
+            builder.RegisterInstance(slow)
                 .As<IFileProcessor>()
+                .SingleInstance();
+            builder.RegisterInstance(new AlwaysRouter(slow))
+                .As<IFileProcessorRouter>()
                 .SingleInstance();
         };
 
@@ -149,6 +159,19 @@ public class CycleLockE2ETests : IDisposable
             new[] { "2", "3", "4", "5" },
             opts => opts.WithStrictOrdering(),
             "DEBUG skip events should carry consecutive=2..5 as their Count property");
+    }
+
+    /// <summary>
+    /// Test-only <see cref="IFileProcessorRouter"/> that routes every path to a single
+    /// processor — used to inject the <see cref="SlowFileProcessor"/> now that the
+    /// orchestrators select their processor via the router rather than a direct
+    /// <see cref="IFileProcessor"/> binding.
+    /// </summary>
+    internal sealed class AlwaysRouter : IFileProcessorRouter
+    {
+        private readonly IFileProcessor _processor;
+        public AlwaysRouter(IFileProcessor processor) => _processor = processor;
+        public IFileProcessor Select(string sourcePath) => _processor;
     }
 
     /// <summary>

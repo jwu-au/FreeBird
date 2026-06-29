@@ -7,6 +7,7 @@ using FluentAssertions;
 using FreeBird.Core.Abstractions;
 using FreeBird.Core.Models;
 using FreeBird.Core.Processing;
+using FreeBird.Core.Tests.TestSupport;
 using Moq;
 using Serilog;
 using Serilog.Core;
@@ -58,7 +59,7 @@ public class ScanOrchestratorTests : IDisposable
     }
 
     private ScanOrchestrator NewSut(IFileProcessor processor, ILogger logger) =>
-        new(processor, logger, PassthroughGate().Object);
+        new(SingleProcessorRouter.For(processor), logger, PassthroughGate().Object);
 
     // --- Discovery ---
 
@@ -96,6 +97,32 @@ public class ScanOrchestratorTests : IDisposable
         summary.Ok.Should().Be(2);
         proc.Verify(p => p.ProcessAsync(It.Is<string>(s => s.EndsWith("a.uc")), It.IsAny<ScanOptions>(), It.IsAny<CancellationToken>()), Times.Once);
         proc.Verify(p => p.ProcessAsync(It.Is<string>(s => s.EndsWith("b.uc!")), It.IsAny<ScanOptions>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunAsync_NcmFile_Discovered_AndRoutedForProcessing()
+    {
+        // Task 15: .ncm files must be discovered by EnumerateSources and dispatched
+        // through the router (which would select NcmFileProcessor in production).
+        await TouchAsync("song.ncm");
+
+        var proc = new Mock<IFileProcessor>();
+        proc.Setup(p => p.ProcessAsync(It.IsAny<string>(), It.IsAny<ScanOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string path, ScanOptions _, CancellationToken _) =>
+                new ScanResult(path, ScanOutcome.Ok, AudioFormat.Flac));
+
+        // A router that records which path it was asked to route — proves the
+        // orchestrator consulted the router for the discovered .ncm file.
+        var router = new Mock<IFileProcessorRouter>();
+        router.Setup(r => r.Select(It.IsAny<string>())).Returns(proc.Object);
+
+        var sut = new ScanOrchestrator(router.Object, _testLogger, PassthroughGate().Object);
+        var summary = await sut.RunAsync(DefaultOptions(concurrency: 1));
+
+        summary.Processed.Should().Be(1);
+        summary.Ok.Should().Be(1);
+        router.Verify(r => r.Select(It.Is<string>(s => s.EndsWith("song.ncm"))), Times.Once);
+        proc.Verify(p => p.ProcessAsync(It.Is<string>(s => s.EndsWith("song.ncm")), It.IsAny<ScanOptions>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -254,7 +281,7 @@ public class ScanOrchestratorTests : IDisposable
     }
 
     [Fact]
-    public void Constructor_NullProcessor_Throws()
+    public void Constructor_NullRouter_Throws()
     {
         Action act = () => _ = new ScanOrchestrator(null!, _testLogger, PassthroughGate().Object);
         act.Should().Throw<ArgumentNullException>();
@@ -263,14 +290,14 @@ public class ScanOrchestratorTests : IDisposable
     [Fact]
     public void Constructor_NullLogger_Throws()
     {
-        Action act = () => _ = new ScanOrchestrator(new Mock<IFileProcessor>().Object, null!, PassthroughGate().Object);
+        Action act = () => _ = new ScanOrchestrator(new Mock<IFileProcessorRouter>().Object, null!, PassthroughGate().Object);
         act.Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
     public void Constructor_NullResolvedMarkerGate_Throws()
     {
-        Action act = () => _ = new ScanOrchestrator(new Mock<IFileProcessor>().Object, _testLogger, null!);
+        Action act = () => _ = new ScanOrchestrator(new Mock<IFileProcessorRouter>().Object, _testLogger, null!);
         act.Should().Throw<ArgumentNullException>();
     }
 
@@ -414,7 +441,7 @@ public class ScanOrchestratorTests : IDisposable
 
         var proc = new Mock<IFileProcessor>(MockBehavior.Strict);
 
-        var sut = new ScanOrchestrator(proc.Object, _testLogger, gate.Object);
+        var sut = new ScanOrchestrator(SingleProcessorRouter.For(proc.Object), _testLogger, gate.Object);
         var summary = await sut.RunAsync(DefaultOptions(concurrency: 1));
 
         proc.Verify(p => p.ProcessAsync(
@@ -443,7 +470,7 @@ public class ScanOrchestratorTests : IDisposable
             .ReturnsAsync((string path, ScanOptions _, CancellationToken _) =>
                 new ScanResult(path, ScanOutcome.Ok, AudioFormat.Mp3));
 
-        var sut = new ScanOrchestrator(proc.Object, _testLogger, gate.Object);
+        var sut = new ScanOrchestrator(SingleProcessorRouter.For(proc.Object), _testLogger, gate.Object);
         var summary = await sut.RunAsync(DefaultOptions(concurrency: 1));
 
         proc.Verify(p => p.ProcessAsync(

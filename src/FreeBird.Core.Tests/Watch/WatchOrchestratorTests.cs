@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using FreeBird.Core.Abstractions;
 using FreeBird.Core.Models;
+using FreeBird.Core.Tests.TestSupport;
 using FreeBird.Core.Watch;
 using Microsoft.Extensions.Time.Testing;
 using Moq;
@@ -110,7 +111,7 @@ public sealed class WatchOrchestratorTests : IDisposable
             scan.Object,
             detector.Object,
             decider.Object,
-            processor.Object,
+            SingleProcessorRouter.For(processor.Object),
             clock,
             loggerArg);
 
@@ -542,16 +543,16 @@ public sealed class WatchOrchestratorTests : IDisposable
         var scan = new Mock<IScanOrchestrator>().Object;
         var det = new Mock<ICompletionDetector>().Object;
         var dec = new Mock<ISkipDecider>().Object;
-        var proc = new Mock<IFileProcessor>().Object;
+        var router = new Mock<IFileProcessorRouter>().Object;
         var clk = new FakeTimeProvider();
         ILogger log = new LoggerConfiguration().CreateLogger();
 
-        ((Action)(() => _ = new WatchOrchestrator(null!, det, dec, proc, clk, log))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new WatchOrchestrator(scan, null!, dec, proc, clk, log))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new WatchOrchestrator(scan, det, null!, proc, clk, log))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new WatchOrchestrator(null!, det, dec, router, clk, log))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new WatchOrchestrator(scan, null!, dec, router, clk, log))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new WatchOrchestrator(scan, det, null!, router, clk, log))).Should().Throw<ArgumentNullException>();
         ((Action)(() => _ = new WatchOrchestrator(scan, det, dec, null!, clk, log))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new WatchOrchestrator(scan, det, dec, proc, null!, log))).Should().Throw<ArgumentNullException>();
-        ((Action)(() => _ = new WatchOrchestrator(scan, det, dec, proc, clk, null!))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new WatchOrchestrator(scan, det, dec, router, null!, log))).Should().Throw<ArgumentNullException>();
+        ((Action)(() => _ = new WatchOrchestrator(scan, det, dec, router, clk, null!))).Should().Throw<ArgumentNullException>();
     }
 
     // --- v3.4 T04: InputDirs cardinality invariant ---

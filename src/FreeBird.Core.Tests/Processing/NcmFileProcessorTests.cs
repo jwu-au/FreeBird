@@ -201,6 +201,10 @@ public class NcmFileProcessorTests : IDisposable
         var info = new FileInfo(src);
         var content = await File.ReadAllTextAsync(sidecars[0]);
         content.Should().Contain($"source_size: {info.Length}");
+        // The FilesystemSkipDecider matches on BOTH source_size AND source_mtime; a
+        // sidecar missing source_mtime would never be recognised as a permanent failure,
+        // so the watch loop would re-decode the corrupt file every cycle.
+        content.Should().Contain("source_mtime:");
     }
 
     [Fact]

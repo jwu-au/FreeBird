@@ -45,11 +45,15 @@ public sealed class CoreModule : Module
                           // WindowsFlacAutoInstaller is registered OS-conditionally in T15 to
                           // avoid colliding with NoOpFlacAutoInstaller's auto-scan registration.
                           && t != typeof(FreeBird.Core.Provisioning.WindowsFlacAutoInstaller)
-                          // NcmFileProcessor also implements IFileProcessor (via IDependency).
-                          // Leaving it in the scan would clobber the .uc FileProcessor as the
-                          // resolved IFileProcessor (last-registration-wins). It is wired
-                          // explicitly under a keyed/dedicated registration in Task 17; until
-                          // then it must NOT participate in the bulk scan.
+                          // Both file processors are excluded from the bulk scan and
+                          // registered explicitly below (Task 17). NcmFileProcessor also
+                          // implements IFileProcessor (via IDependency); leaving it in the
+                          // scan would clobber the .uc FileProcessor as the resolved
+                          // IFileProcessor (last-registration-wins). FileProcessor is also
+                          // excluded so the explicit AsSelf + As<IFileProcessor> registration
+                          // is the single source of truth (mirroring the tag-writer block) —
+                          // the router needs both processors resolvable AsSelf.
+                          && t != typeof(FreeBird.Core.Processing.FileProcessor)
                           && t != typeof(FreeBird.Core.Processing.NcmFileProcessor))
                .AsImplementedInterfaces()
                .InstancePerLifetimeScope();
@@ -154,6 +158,26 @@ public sealed class CoreModule : Module
         builder.RegisterType<FreeBird.Core.Tagging.CompositeTagWriter>()
                .As<ITagWriter>()
                .SingleInstance();
+
+        // File processors (Task 17) — explicit registrations.
+        //
+        // Two concrete processors handle the two source families:
+        //   - FileProcessor    : the .uc / .uc! NetEase cache pipeline. Remains THE
+        //                        IFileProcessor binding (code/tests that resolve
+        //                        IFileProcessor directly expect FileProcessor).
+        //   - NcmFileProcessor : the encrypted .ncm container pipeline.
+        //
+        // Both are exposed AsSelf so FileProcessorRouter can inject them by concrete
+        // type (only ONE can be the IFileProcessor binding). Both are excluded from the
+        // bulk scan above so this is the single registration site (mirrors tag writers).
+        // InstancePerLifetimeScope matches the default processor lifetime.
+        builder.RegisterType<FreeBird.Core.Processing.FileProcessor>()
+               .As<IFileProcessor>()
+               .AsSelf()
+               .InstancePerLifetimeScope();
+        builder.RegisterType<FreeBird.Core.Processing.NcmFileProcessor>()
+               .AsSelf()
+               .InstancePerLifetimeScope();
 
         // HttpClient — Autofac-native registration (Amendment 2).
         // We deliberately do NOT use Microsoft.Extensions.Http / IHttpClientFactory;
