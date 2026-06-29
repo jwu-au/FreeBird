@@ -64,7 +64,7 @@ public sealed class NcmDecoder : INcmDecoder
             // --- 5. Cover ---
             byte[]? cover = ReadCover(source);
 
-            // --- 6. Body (streamed) + 7. provisional format sniff ---
+            // --- 6. Body (streamed) + 7. best-effort format hint (authoritative sniff: Task 10) ---
             AudioFormat format = await DecryptBodyAsync(source, output, keyBox, ct).ConfigureAwait(false);
 
             return new NcmDecodeResult(metadata, cover, format);
@@ -197,23 +197,16 @@ public sealed class NcmDecoder : INcmDecoder
         return format;
     }
 
-    // ponytail: provisional inline magic-byte sniff. Task 7 routes format detection through the
-    // authoritative IFormatSniffer; until then this mirrors the reference decoder (defaults to FLAC).
+    // Best-effort format HINT only. The AUTHORITATIVE format is determined by NcmFileProcessor
+    // (Task 10), which sniffs the decoded staging FILE via IFormatSniffer — exactly as the .uc
+    // FileProcessor does. We delegate to MagicByteFormatSniffer.SniffBytes (the same pure detector
+    // IFormatSniffer uses) so this hint can never disagree with the authoritative sniff for valid
+    // bodies — single source of truth for the magic-byte signatures. Unknown falls back to FLAC,
+    // mirroring the reference decoder's default.
     private static AudioFormat SniffFormat(ReadOnlySpan<byte> head)
     {
-        if (head.Length >= 4 && head[0] == 0x66 && head[1] == 0x4C && head[2] == 0x61 && head[3] == 0x43)
-        {
-            return AudioFormat.Flac;
-        }
-        if (head.Length >= 3 && head[0] == 0x49 && head[1] == 0x44 && head[2] == 0x33)
-        {
-            return AudioFormat.Mp3;
-        }
-        if (head.Length >= 2 && head[0] == 0xFF && (head[1] == 0xFB || head[1] == 0xF3 || head[1] == 0xF2))
-        {
-            return AudioFormat.Mp3;
-        }
-        return AudioFormat.Flac;
+        AudioFormat sniffed = MagicByteFormatSniffer.SniffBytes(head);
+        return sniffed == AudioFormat.Unknown ? AudioFormat.Flac : sniffed;
     }
 
     /// <summary>

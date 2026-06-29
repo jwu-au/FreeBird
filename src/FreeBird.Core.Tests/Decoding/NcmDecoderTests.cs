@@ -170,7 +170,56 @@ public sealed class NcmDecoderTests : IDisposable
         result.Format.Should().Be(AudioFormat.Mp3);
     }
 
+    [Fact]
+    public async Task DecodeAsync_Mp3BodyWithMpeg2FrameSync_DetectsMp3()
+    {
+        // A raw MPEG frame sync where byte2 satisfies the authoritative sniffer's mask
+        // ((b & 0xE0) == 0xE0) but NOT the old narrow 0xFB/0xF3/0xF2 list — e.g. 0xE3.
+        // The decoder hint must agree with IFormatSniffer (MagicByteFormatSniffer) for valid MP3.
+        var body = new byte[64];
+        body[0] = 0xFF;
+        body[1] = 0xE3;
+        var path = WriteNcm(NcmTestEncoder.Encode(body, meta: null, cover: null), "mp3-mpeg2.ncm");
+
+        using var output = new MemoryStream();
+        var result = await new NcmDecoder().DecodeAsync(path, output);
+
+        result.Format.Should().Be(AudioFormat.Mp3);
+        // Cross-check: the authoritative sniffer agrees on these exact head bytes.
+        MagicByteFormatSniffer.SniffBytes(body).Should().Be(AudioFormat.Mp3);
+    }
+
     // ---------- Error paths ----------
+
+    [Fact]
+    public async Task DecodeAsync_CorruptRc4KeyBlock_ThrowsDecryptionFailed()
+    {
+        // Build a valid .ncm, then corrupt the LAST block of the RC4-key ciphertext so the
+        // AES-ECB decrypt sees invalid PKCS7 padding and throws CryptographicException, which
+        // the decoder maps to NcmDecodeException("NCM decryption failed").
+        var body = File.ReadAllBytes(Fx.SampleFlacPath);
+        var full = NcmTestEncoder.Encode(body, meta: null, cover: null);
+
+        // Layout: 8 bytes magic + 2 filler = 10, then Int32-LE key cipher length at [10..14),
+        // then the ciphertext at [14 .. 14+keyLen).
+        int keyLen = BitConverter.ToInt32(full, 10);
+        int cipherStart = 14;
+        int lastBlockStart = cipherStart + keyLen - 16; // flip the final AES block -> bad padding
+        for (int i = 0; i < 16; i++)
+        {
+            full[lastBlockStart + i] ^= 0xFF;
+        }
+        var path = WriteNcm(full, "corrupt-key.ncm");
+
+        var act = async () =>
+        {
+            using var output = new MemoryStream();
+            await new NcmDecoder().DecodeAsync(path, output);
+        };
+
+        var ex = await act.Should().ThrowAsync<NcmDecodeException>();
+        ex.Which.Reason.Should().Contain("decryption");
+    }
 
     [Fact]
     public async Task DecodeAsync_TruncatedHeader_ThrowsTruncated()
