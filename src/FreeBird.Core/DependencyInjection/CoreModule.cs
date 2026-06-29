@@ -44,7 +44,13 @@ public sealed class CoreModule : Module
                           && t != typeof(FreeBird.Core.Tagging.CompositeTagWriter)
                           // WindowsFlacAutoInstaller is registered OS-conditionally in T15 to
                           // avoid colliding with NoOpFlacAutoInstaller's auto-scan registration.
-                          && t != typeof(FreeBird.Core.Provisioning.WindowsFlacAutoInstaller))
+                          && t != typeof(FreeBird.Core.Provisioning.WindowsFlacAutoInstaller)
+                          // NcmFileProcessor also implements IFileProcessor (via IDependency).
+                          // Leaving it in the scan would clobber the .uc FileProcessor as the
+                          // resolved IFileProcessor (last-registration-wins). It is wired
+                          // explicitly under a keyed/dedicated registration in Task 17; until
+                          // then it must NOT participate in the bulk scan.
+                          && t != typeof(FreeBird.Core.Processing.NcmFileProcessor))
                .AsImplementedInterfaces()
                .InstancePerLifetimeScope();
 
