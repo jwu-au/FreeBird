@@ -5,6 +5,14 @@ All notable changes to FreeBird are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.0] — 2026-06-30
+
+### Added
+- **`.ncm` file support** — FreeBird now decodes NetEase's *downloaded* `.ncm` files in addition to the existing `.uc` / `.uc!` stream-cache files. `fb scan` and `fb watch` pick up `.ncm` files automatically (same commands, no new flags); each input is routed to the right decoder by extension. Unlike cache files, `.ncm` files carry their own metadata and cover art, so they decode **fully offline** — no NetEase API call is made for them.
+  - **Embedded metadata + naming.** Title, artist(s), and album are read straight from inside the file; output is named `Artist - Title.flac` (multi-artist joined with ` & `), falling back to the original filename when the embedded metadata is absent.
+  - **Embedded cover art.** The album cover stored in the `.ncm` is written into the output — FLAC via `metaflac` (PCM-MD5 preserved), MP3/M4A via TagLibSharp. `--no-write-tags` suppresses both tags and cover.
+  - **Same safety guarantees as the `.uc` path.** Atomic staging writes, integrity checks (`off`/`l1`/`l3`/`auto`), quarantine-with-sidecar on a corrupt/undecodable file, and resolution markers so `fb watch` decodes each `.ncm` exactly once and skips it thereafter. Inputs are never modified.
+
 ## [3.5.2] — 2026-06-21
 
 ### Fixed

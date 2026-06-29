@@ -8,7 +8,12 @@ Turn your **NetEase Cloud Music** offline cache into clean, properly named, full
 
 > Works on **macOS, Linux, and Windows**.
 
-FreeBird takes the unplayable `.uc` / `.uc!` cache files NetEase leaves on your device and turns them into normal music files — named `Artist - Title.flac`, with proper tags, verified as not corrupted. It never touches your originals.
+FreeBird takes the unplayable files NetEase leaves on your device and turns them into normal music files — named `Artist - Title.flac`, with proper tags, verified as not corrupted. It never touches your originals.
+
+Two kinds of NetEase files are supported:
+
+- **`.uc` / `.uc!` cache files** — what NetEase writes when you *stream* a song. FreeBird fetches the track's metadata from NetEase to name and tag the output.
+- **`.ncm` files** — what NetEase writes when you *download* a song. These already contain the title, artist, album, and cover art inside the file, so FreeBird decodes them fully **offline** — no network needed — and embeds the album art automatically.
 
 ---
 
