@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/jwu-au/FreeBird)](https://github.com/jwu-au/FreeBird/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Turn your **NetEase Cloud Music** offline cache into clean, properly named, fully tagged **MP3 / FLAC / M4A** files you can play anywhere.
+Turn your **NetEase Cloud Music** offline files — streamed cache *and* downloaded songs — into clean, properly named, fully tagged **MP3 / FLAC / M4A** files you can play anywhere.
 
 > Works on **macOS, Linux, and Windows**.
 
@@ -23,16 +23,18 @@ Two kinds of NetEase files are supported:
 2. **Run one command:**
 
 ```bash
-# Convert everything in your cache once, then exit:
-fb scan <your-cache-folder> --output ~/Music/decoded
+# Convert everything in a folder once, then exit:
+fb scan <your-folder> --output ~/Music/decoded
 
-# …or keep it running and auto-convert new songs as you listen:
-fb watch <your-cache-folder> --output ~/Music/decoded
+# …or keep it running and auto-convert new files as they appear:
+fb watch <your-folder> --output ~/Music/decoded
 ```
 
 3. **Open** `~/Music/decoded` in your music player. That's it.
 
-> **Where's my cache folder?**
+Point `<your-folder>` at your NetEase **stream cache** (for `.uc` / `.uc!` files) or at wherever you keep **downloaded** `.ncm` files — FreeBird handles both, and you can pass several folders at once.
+
+> **Where's my stream cache folder?**
 > - **macOS:** `~/Library/Containers/com.netease.163music/Data/Caches/online_play_cache`
 > - **Windows:** `C:\Users\<you>\AppData\Local\Netease\CloudMusic\Cache\Cache`
 
@@ -82,10 +84,12 @@ The `fb` binary lands in `src/FreeBird.Cli/bin/Release/net10.0/`. See [CONTRIBUT
 
 FreeBird has two main commands. Both take one or more input folders and a single `--output` folder.
 
+Both commands automatically pick up NetEase `.uc` / `.uc!` cache files **and** `.ncm` downloaded files found directly in each input folder — no flags needed.
+
 ### `fb scan` — convert once and exit
 
 ```bash
-fb scan <cache-folder> --output ~/Music/decoded
+fb scan <folder> --output ~/Music/decoded
 ```
 
 ### `fb watch` — keep converting new songs
@@ -93,7 +97,7 @@ fb scan <cache-folder> --output ~/Music/decoded
 Runs until you press Ctrl-C, converting files as they appear.
 
 ```bash
-fb watch <cache-folder> --output ~/Music/decoded
+fb watch <folder> --output ~/Music/decoded
 ```
 
 ### Common options
@@ -249,7 +253,7 @@ Enable it: `sudo systemctl enable --now freebird`.
 
 | Problem | Try this |
 |---|---|
-| A file is named `<number>.mp3` instead of `Artist - Title.mp3` | Metadata wasn't available yet (no network, or NetEase rate-limited the request). FreeBird retries automatically and renames it once it succeeds. |
+| A file is named `<number>.mp3` instead of `Artist - Title.mp3` | Only happens for `.uc` cache files: metadata wasn't available yet (no network, or NetEase rate-limited the request). FreeBird retries automatically and renames it once it succeeds. (`.ncm` downloads carry their own metadata, so they never fall back to a number.) |
 | `flac` not found (Linux) | `sudo apt install flac` (or your distro's equivalent). |
 | Windows auto-download of `flac` fails | Check network access to `xiph.org`, or pass `--flac-bin C:\path\to\flac.exe`. |
 | Something landed in `.freebird-failed/` | Open the matching `.txt` note next to it — it explains the failure. |
@@ -270,7 +274,7 @@ Enable it: `sudo systemctl enable --now freebird`.
 <summary>Good to know</summary>
 
 - **No recursive scan** — only files directly in each input folder are processed. Pass subfolders as separate arguments.
-- **Read-only on inputs** — FreeBird never modifies or deletes your source `.uc` files.
+- **Read-only on inputs** — FreeBird never modifies or deletes your source `.uc` / `.ncm` files.
 - **CJK / Unicode** song and artist names are fully supported.
 - **Multiple artists** are joined with ` & ` in the filename and stored as separate tag values.
 - **Same song in two folders** — the first writer wins; an internal lock prevents file races.
