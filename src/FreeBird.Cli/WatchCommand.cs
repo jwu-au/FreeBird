@@ -64,7 +64,7 @@ public static class WatchCommand
         var pollIntervalOpt = new Option<string>("--poll-interval")
         {
             Description = "How often to poll the input dir. Format: Ns or Nm (e.g. 5s, 2m). Range 1s..60m.",
-            DefaultValueFactory = _ => "5s",
+            DefaultValueFactory = _ => "30s",
         };
 
         var stabilityChecksOpt = new Option<int>("--stability-checks")
@@ -194,7 +194,7 @@ public static class WatchCommand
             var integrity = parseResult.GetValue(integrityOpt);
             var concurrency = parseResult.GetValue(concurrencyOpt);
             var collision = parseResult.GetValue(collisionOpt);
-            var pollRaw = parseResult.GetValue(pollIntervalOpt) ?? "5s";
+            var pollRaw = parseResult.GetValue(pollIntervalOpt) ?? "30s";
             var stabilityChecks = parseResult.GetValue(stabilityChecksOpt);
             var minFileSize = parseResult.GetValue(minFileSizeOpt);
             var skipInitial = parseResult.GetValue(skipInitialScanOpt);

@@ -34,6 +34,7 @@ public sealed class WatchOrchestrator : IWatchOrchestrator
 
     private readonly SemaphoreSlim _cycleLock = new(1, 1);
     private int _consecutiveSkips;
+    private bool _lastPollSkipped;
 
     public WatchOrchestrator(
         IScanOrchestrator scanOrchestrator,
@@ -134,10 +135,20 @@ public sealed class WatchOrchestrator : IWatchOrchestrator
             if (!await _cycleLock.WaitAsync(0, CancellationToken.None).ConfigureAwait(false))
             {
                 LogSkippedPoll();
+                _lastPollSkipped = true;
                 continue;
             }
 
-            _consecutiveSkips = 0;
+            // Only reset the ramp when we genuinely caught up: a poll that acquires the lock
+            // after a NON-skipping previous poll means the watcher idled at least one poll
+            // without overlap. If the previous poll skipped, cycles are running back-to-back
+            // (a sustained-busy stretch) — do NOT reset, so the ramp keeps progressing toward
+            // silence instead of re-WARNing at every cycle boundary.
+            if (!_lastPollSkipped)
+            {
+                _consecutiveSkips = 0;
+            }
+            _lastPollSkipped = false;
             // Fire-and-forget the cycle; the lock is released by the cycle task itself.
             activeCycle = Task.Run(async () =>
             {

@@ -24,7 +24,7 @@ public sealed record WatchOptions : IMetadataOptions
         ArgumentNullException.ThrowIfNull(InputDirs);
         ArgumentNullException.ThrowIfNull(OutputDir);
 
-        var poll = PollInterval ?? TimeSpan.FromSeconds(5);
+        var poll = PollInterval ?? TimeSpan.FromSeconds(30);
         if (poll < TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(PollInterval), poll, "PollInterval must be non-negative.");

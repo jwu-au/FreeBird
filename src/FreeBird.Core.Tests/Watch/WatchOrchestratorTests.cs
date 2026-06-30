@@ -458,14 +458,22 @@ public sealed class WatchOrchestratorTests : IDisposable
             Times.AtLeastOnce);
     }
 
+    /// <summary>
+    /// Back-to-back busy cycles (cycle1 blocks, a poll skips, cycle1 completes, cycle2
+    /// immediately starts and blocks again) are a SINGLE sustained-busy stretch. The
+    /// ramp-to-silence must NOT restart just because one cycle finished and another
+    /// began — the user should see the "Previous cycle still running" WARN exactly ONCE
+    /// across the whole stretch, then DEBUG. The counter only resets when the watcher
+    /// genuinely catches up (a non-skipping poll precedes a lock-acquiring poll).
+    /// </summary>
     [Fact]
-    public async Task RunAsync_SuccessfulCycleResetsSkipCounter()
+    public async Task RunAsync_BackToBackBusyCycles_DoesNotRestartWarnRamp()
     {
         var (sut, _, _, _, processor, clock, logger) = MakeSut(useSilentLogger: false);
         var options = MakeOptions(pollInterval: TimeSpan.FromMilliseconds(50), skipInitialScan: true);
         await TouchUc("a.uc");
 
-        // First cycle: block for 2 skipped ticks, then succeed.
+        // First cycle: block until released, then succeed.
         var firstHold = new TaskCompletionSource();
         var callCount = 0;
         processor.Reset();
@@ -483,15 +491,13 @@ public sealed class WatchOrchestratorTests : IDisposable
         using var soft = new CancellationTokenSource();
         var runTask = sut.RunAsync(options, soft.Token, CancellationToken.None);
 
-        // Tick 1 → start cycle, blocks
+        // Tick 1 → start cycle1, blocks
         await AdvanceAndYieldAsync(clock, TimeSpan.FromMilliseconds(50));
-        // Tick 2 → skip #1 (WARN)
+        // Tick 2 → skip #1 (WARN) — cycle1 still running
         await AdvanceAndYieldAsync(clock, TimeSpan.FromMilliseconds(50));
-        // Release first
-        firstHold.SetResult();
-        await Task.Delay(50);
 
-        // Now we want a second blocking cycle so we can verify skip counter was reset → next skip is WARN again
+        // Re-arm the processor so cycle2 blocks too (back-to-back), BEFORE releasing cycle1
+        // so the very next lock-acquiring poll immediately re-enters a blocking cycle.
         var secondHold = new TaskCompletionSource();
         processor.Reset();
         processor.Setup(p => p.ProcessAsync(It.IsAny<string>(), It.IsAny<ScanOptions>(), It.IsAny<CancellationToken>()))
@@ -501,16 +507,84 @@ public sealed class WatchOrchestratorTests : IDisposable
                      return new ScanResult(path, ScanOutcome.Ok, AudioFormat.Mp3);
                  });
 
-        // Tick 3 → start new blocking cycle
+        // Release cycle1; it completes and frees the lock.
+        firstHold.SetResult();
+        await Task.Delay(50);
+
+        // Tick 3 → previous poll skipped, so this lock-acquiring poll must NOT reset the
+        // ramp; it starts cycle2 which blocks.
         await AdvanceAndYieldAsync(clock, TimeSpan.FromMilliseconds(50));
-        // Tick 4 → skip → should be WARN again, not DEBUG (because counter was reset)
+        // Tick 4 → skip #2 → DEBUG, NOT a second WARN (ramp continued, did not restart).
         await AdvanceAndYieldAsync(clock, TimeSpan.FromMilliseconds(50));
 
         secondHold.SetResult();
         soft.Cancel();
         await runTask.WaitAsync(TimeSpan.FromSeconds(5));
 
-        // At least 2 first-skip WARNs were emitted (one before, one after the reset).
+        // Exactly ONE first-skip WARN across the entire sustained-busy stretch.
+        logger.Verify(l => l.Warning(It.Is<string>(s => s.Contains("Previous cycle still running"))),
+            Times.Once);
+    }
+
+    /// <summary>
+    /// After the watcher genuinely catches up — a poll fires with NO cycle in progress AND
+    /// the previous poll did not itself skip (the system idled at least one non-overlapping
+    /// poll) — the ramp resets. A fresh busy stretch later therefore earns a fresh WARN.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_IdlePollBetweenBusyStretches_AllowsFreshWarn()
+    {
+        var (sut, _, _, _, processor, clock, logger) = MakeSut(useSilentLogger: false);
+        var options = MakeOptions(pollInterval: TimeSpan.FromMilliseconds(50), skipInitialScan: true);
+        await TouchUc("a.uc");
+
+        // call #1 blocks (cycle1); call #2 returns immediately (the idle catch-up cycle);
+        // call #3 blocks again (cycle3, the second busy stretch).
+        var firstHold = new TaskCompletionSource();
+        var thirdHold = new TaskCompletionSource();
+        var callCount = 0;
+        processor.Reset();
+        processor.Setup(p => p.ProcessAsync(It.IsAny<string>(), It.IsAny<ScanOptions>(), It.IsAny<CancellationToken>()))
+                 .Returns<string, ScanOptions, CancellationToken>(async (path, _, ct) =>
+                 {
+                     var n = Interlocked.Increment(ref callCount);
+                     if (n == 1)
+                     {
+                         await firstHold.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                     }
+                     else if (n >= 3)
+                     {
+                         await thirdHold.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                     }
+                     return new ScanResult(path, ScanOutcome.Ok, AudioFormat.Mp3);
+                 });
+
+        using var soft = new CancellationTokenSource();
+        var runTask = sut.RunAsync(options, soft.Token, CancellationToken.None);
+
+        // Tick 1 → start cycle1, blocks
+        await AdvanceAndYieldAsync(clock, TimeSpan.FromMilliseconds(50));
+        // Tick 2 → skip #1 (WARN) — first busy stretch
+        await AdvanceAndYieldAsync(clock, TimeSpan.FromMilliseconds(50));
+
+        // Release cycle1 and let it finish so the lock is free with no overlap pending.
+        firstHold.SetResult();
+        await Task.Delay(50);
+
+        // Tick 3 → previous poll skipped, so this lock-acquiring poll does NOT reset, but
+        // cycle2 (call #2) returns immediately → lock freed; this poll did not skip.
+        await AdvanceAndYieldAsync(clock, TimeSpan.FromMilliseconds(50));
+        // Tick 4 → no cycle in progress AND previous poll did not skip → ramp RESETS here.
+        // cycle (call #3) starts and blocks (second busy stretch begins).
+        await AdvanceAndYieldAsync(clock, TimeSpan.FromMilliseconds(50));
+        // Tick 5 → skip → fresh WARN because ramp was reset.
+        await AdvanceAndYieldAsync(clock, TimeSpan.FromMilliseconds(50));
+
+        thirdHold.SetResult();
+        soft.Cancel();
+        await runTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Two first-skip WARNs: one per busy stretch, separated by a genuine idle catch-up.
         logger.Verify(l => l.Warning(It.Is<string>(s => s.Contains("Previous cycle still running"))),
             Times.AtLeast(2));
     }

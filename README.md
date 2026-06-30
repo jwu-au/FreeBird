@@ -125,7 +125,7 @@ fb watch ~/Music/netease-cache ~/Downloads/netease --output ~/Music/decoded
 
 | Option | Default | What it does |
 |---|---|---|
-| `--poll-interval <Ns\|Nm>` | `5s` | How often to check the folder (`1s`..`60m`). |
+| `--poll-interval <Ns\|Nm>` | `30s` | How often to check the folder (`1s`..`60m`). |
 | `--stability-checks <n>` | `2` | Equal-size checks before a file is treated as finished (1-10). |
 | `--min-file-size <bytes>` | `1024` | Ignore files smaller than this. |
 | `--skip-initial-scan` | off | Only process files that appear *after* startup. |

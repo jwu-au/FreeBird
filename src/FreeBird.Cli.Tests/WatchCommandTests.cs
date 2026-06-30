@@ -210,7 +210,7 @@ public class WatchCommandTests : IDisposable
             captured!.Integrity.Should().Be(IntegrityLevel.Auto);
             captured.Concurrency.Should().Be(4);
             captured.Collision.Should().Be(CollisionPolicy.Skip);
-            captured.PollInterval.Should().Be(TimeSpan.FromSeconds(5));
+            captured.PollInterval.Should().Be(TimeSpan.FromSeconds(30));
             captured.StabilityChecks.Should().Be(2);
             captured.MinFileSize.Should().Be(1024L);
             captured.SkipInitialScan.Should().BeFalse();

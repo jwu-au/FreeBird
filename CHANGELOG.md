@@ -5,6 +5,14 @@ All notable changes to FreeBird are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.1] — 2026-07-01
+
+### Changed
+- **`fb watch` default `--poll-interval` is now `30s` (was `5s`).** The old 5-second default polled far too aggressively for large libraries where each file (especially `.ncm` / FLAC with L3 integrity) takes much longer than 5s to decode — every poll just hit the "previous cycle still running" guard. 30s is a saner default; override with `--poll-interval` as before.
+
+### Fixed
+- **`fb watch` no longer spams "Previous cycle still running, skipping this poll".** The skip-warning was designed to ramp to silence (one WARN, then debug, then quiet), but the counter reset at every cycle boundary — so a continuously-busy watcher (back-to-back long decodes) re-emitted the WARN on almost every poll. The ramp now persists across a sustained-busy stretch and only resets once the watcher genuinely catches up, so you see the warning once (plus the long-running hint), then quiet.
+
 ## [3.6.0] — 2026-06-30
 
 ### Added

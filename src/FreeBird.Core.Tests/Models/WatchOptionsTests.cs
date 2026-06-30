@@ -15,7 +15,7 @@ public class WatchOptionsTests
         opts.Integrity.Should().Be(IntegrityLevel.Auto);
         opts.Concurrency.Should().Be(4);
         opts.Collision.Should().Be(CollisionPolicy.Skip);
-        opts.PollInterval.Should().Be(TimeSpan.FromSeconds(5));
+        opts.PollInterval.Should().Be(TimeSpan.FromSeconds(30));
         opts.StabilityChecks.Should().Be(2);
         opts.MinFileSizeBytes.Should().Be(1024);
         opts.SkipInitialScan.Should().BeFalse();

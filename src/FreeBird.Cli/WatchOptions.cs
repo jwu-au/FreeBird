@@ -15,7 +15,7 @@ public sealed class WatchOptions
     public IntegrityLevel Integrity { get; init; } = IntegrityLevel.Auto;
     public int Concurrency { get; init; } = 4;
     public CollisionPolicy Collision { get; init; } = CollisionPolicy.Skip;
-    public TimeSpan PollInterval { get; init; } = TimeSpan.FromSeconds(5);
+    public TimeSpan PollInterval { get; init; } = TimeSpan.FromSeconds(30);
     public int StabilityChecks { get; init; } = 2;
     public long MinFileSize { get; init; } = 1024L;
     public bool SkipInitialScan { get; init; }
