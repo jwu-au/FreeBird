@@ -89,15 +89,21 @@ Both commands automatically pick up NetEase `.uc` / `.uc!` cache files **and** `
 ### `fb scan` — convert once and exit
 
 ```bash
-fb scan <folder> --output ~/Music/decoded
+# One folder:
+fb scan ~/Music/netease-cache --output ~/Music/decoded
+
+# Several folders at once — e.g. your stream cache *and* your downloads —
+# all decoded into the same output folder:
+fb scan ~/Music/netease-cache ~/Downloads/netease --output ~/Music/decoded
 ```
 
 ### `fb watch` — keep converting new songs
 
-Runs until you press Ctrl-C, converting files as they appear.
+Runs until you press Ctrl-C, converting files as they appear. Like `fb scan`, it accepts multiple input folders and watches them all at once.
 
 ```bash
-fb watch <folder> --output ~/Music/decoded
+# Watch your stream cache and your downloads folder together:
+fb watch ~/Music/netease-cache ~/Downloads/netease --output ~/Music/decoded
 ```
 
 ### Common options
@@ -110,7 +116,7 @@ fb watch <folder> --output ~/Music/decoded
 | `--no-write-tags` | off | Don't embed ARTIST/TITLE/ALBUM tags. |
 | `-v` / `-q` | off | More (`-v`) or less (`-q`) logging. |
 
-> **Tip:** You can pass several folders at once — `fb scan ~/cache1 ~/cache2 --output ~/music`.
+> **Tip:** Pass as many input folders as you like before `--output`; they're all decoded into the same output folder. `fb watch` accepts multiple folders too and watches them all at once.
 
 <details>
 <summary>All <code>fb watch</code> options (polling, stability, log file)</summary>
